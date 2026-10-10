@@ -21360,20 +21360,63 @@ paths:
       operationId: getApiPlugins
       tags:
         - Plugins
-      summary: "GET plugins"
+      summary: List installed plugins
+      description: >-
+        Lists safe plugin metadata, omitting configuration, entry-point paths, and the full manifest.
+        The handler uses `requireManagementAuth`; local-open installations may allow anonymous
+        access from an admitted local peer. Public and unknown remote peers are blocked by the
+        LOCAL_ONLY tier before authentication.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [installed, active, inactive, error] }
       responses:
         "200":
-          description: OK
+          description: Safe plugin metadata without config, manifest, or plugin directory fields.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginListResponse" }
     post:
       operationId: postApiPlugins
       tags:
         - Plugins
-      summary: "POST plugins"
+      summary: Install a plugin from a local path
+      description: >-
+        Installs a validated plugin from an absolute local filesystem path. The path is sensitive
+        host information and is not returned. The handler uses `requireManagementAuth`; local-open
+        installations may allow anonymous access from an admitted local peer. Public and unknown
+        remote peers are blocked by the LOCAL_ONLY tier before authentication.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PluginLocalInstallRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Plugin installed; response omits its filesystem directory and configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginInstallResponse" }
   /api/plugins/{name}:
     parameters:
       - name: name
@@ -21385,20 +21428,54 @@ paths:
       operationId: deleteApiPluginsByName
       tags:
         - Plugins
-      summary: "DELETE plugins › <name>"
+      summary: Uninstall a plugin
+      description: >-
+        Uninstalls the named plugin and removes its managed directory. The handler uses
+        `requireManagementAuth`; local-open installations may allow anonymous access from an
+        admitted local peer. Public and unknown remote peers are blocked by the LOCAL_ONLY tier
+        before authentication.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Plugin uninstalled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginLifecycleResponse" }
     get:
       operationId: getApiPluginsByName
       tags:
         - Plugins
-      summary: "GET plugins › <name>"
+      summary: Get plugin details
+      description: >-
+        Returns plugin metadata, configuration values, the managed filesystem path, and any stored
+        error text. Configuration and host paths may contain secrets or private system details;
+        treat the response as sensitive. The handler uses `requireManagementAuth`; local-open
+        installations may allow anonymous access from an admitted local peer. Public and unknown
+        remote peers are blocked by the LOCAL_ONLY tier before authentication.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Full plugin details including sensitive configuration and host path metadata.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginDetailsResponse" }
   /api/plugins/{name}/activate:
     parameters:
       - name: name
@@ -21410,11 +21487,26 @@ paths:
       operationId: postApiPluginsByNameActivate
       tags:
         - Plugins
-      summary: "POST plugins › <name> › activate"
+      summary: Activate a plugin
+      description: >-
+        Loads and activates the named plugin. The handler uses `requireManagementAuth`; local-open
+        installations may allow anonymous access from an admitted local peer. Public and unknown
+        remote peers are blocked by the LOCAL_ONLY tier before authentication.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Activation completed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginLifecycleResponse" }
   /api/plugins/{name}/config:
     parameters:
       - name: name
@@ -21426,20 +21518,62 @@ paths:
       operationId: getApiPluginsByNameConfig
       tags:
         - Plugins
-      summary: "GET plugins › <name> › config"
+      summary: Get plugin configuration
+      description: >-
+        Returns the plugin's stored config values and config schema. Config values may contain
+        credentials or private data; treat the response as sensitive. The handler uses
+        `requireManagementAuth`; local-open installations may allow anonymous access from an
+        admitted local peer. Public and unknown remote peers are blocked by the LOCAL_ONLY tier
+        before authentication.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Stored plugin configuration and its config schema.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginConfigResponse" }
     put:
       operationId: putApiPluginsByNameConfig
       tags:
         - Plugins
-      summary: "PUT plugins › <name> › config"
+      summary: Update plugin configuration
+      description: >-
+        Replaces plugin config values after validation against the plugin's config schema. Config
+        values may contain credentials or private data; treat request and response as sensitive.
+        The handler uses `requireManagementAuth`; local-open installations may allow anonymous
+        access from an admitted local peer. Public and unknown remote peers are blocked by the
+        LOCAL_ONLY tier before authentication.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PluginConfigUpdateRequest" }
       responses:
         "200":
-          description: OK
+          description: Plugin configuration saved.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginConfigUpdateResponse" }
   /api/plugins/{name}/deactivate:
     parameters:
       - name: name
@@ -21451,41 +21585,112 @@ paths:
       operationId: postApiPluginsByNameDeactivate
       tags:
         - Plugins
-      summary: "POST plugins › <name> › deactivate"
+      summary: Deactivate a plugin
+      description: >-
+        Stops the named plugin. The handler uses `requireManagementAuth`; local-open installations
+        may allow anonymous access from an admitted local peer. Public and unknown remote peers are
+        blocked by the LOCAL_ONLY tier before authentication.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Deactivation completed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginLifecycleResponse" }
   /api/plugins/marketplace:
     get:
       operationId: getApiPluginsMarketplace
       tags:
         - Plugins
-      summary: "GET plugins › marketplace"
+      summary: List marketplace plugins
+      description: >-
+        Returns seed marketplace entries or entries from a configured public registry. Custom
+        registry responses are filtered by the presence of a string `name` but otherwise remain
+        extensible remote data. The handler uses `requireManagementAuth`; local-open installations
+        may allow anonymous access from an admitted local peer. Public and unknown remote peers are
+        blocked by the LOCAL_ONLY tier before authentication.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Marketplace entries; custom registry fields are not fully validated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginMarketplaceListResponse" }
   /api/plugins/marketplace/install:
     post:
       operationId: postApiPluginsMarketplaceInstall
       tags:
         - Plugins
-      summary: "POST plugins › marketplace › install"
+      summary: Install a plugin from the marketplace
+      description: >-
+        Downloads and installs the named marketplace entry after public-address checks and optional
+        checksum verification. The handler uses `requireManagementAuth`; local-open installations
+        may allow anonymous access from an admitted local peer. Public and unknown remote peers are
+        blocked by the LOCAL_ONLY tier before authentication.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PluginMarketplaceInstallRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Marketplace plugin installed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginMarketplaceInstallResponse" }
   /api/plugins/scan:
     post:
       operationId: postApiPluginsScan
       tags:
         - Plugins
-      summary: "POST plugins › scan"
+      summary: Scan the plugin directory
+      description: >-
+        Scans the managed plugin directory for manifests and synchronizes newly discovered plugins.
+        Per-entry error diagnostics can contain filesystem details; treat the response as sensitive.
+        The handler uses `requireManagementAuth`; local-open installations may allow anonymous
+        access from an admitted local peer. Public and unknown remote peers are blocked by the
+        LOCAL_ONLY tier before authentication.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Number of discovered plugins and per-entry scan diagnostics.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginScanResponse" }
   /api/pricing/sync:
     delete:
       operationId: deleteApiPricingSync
@@ -58565,4 +58770,256 @@ components:
       properties:
         success: { type: boolean, const: true }
         idempotencyKey: { type: string, format: uuid }
+      additionalProperties: false
+
+    PluginSummary:
+      type: object
+      required:
+        - id
+        - name
+        - version
+        - description
+        - author
+        - status
+        - enabled
+        - hooks
+        - permissions
+        - installedAt
+        - updatedAt
+        - activatedAt
+      properties:
+        id: { type: string }
+        name: { type: string }
+        version: { type: string }
+        description: { type: [string, "null"] }
+        author: { type: [string, "null"] }
+        status: { type: string, enum: [installed, active, inactive, error] }
+        enabled: { type: boolean }
+        hooks:
+          type: array
+          items: { type: string }
+        permissions:
+          type: array
+          items: { type: string }
+        installedAt: { type: string }
+        updatedAt: { type: string }
+        activatedAt: { type: [string, "null"] }
+      additionalProperties: false
+
+    PluginListResponse:
+      type: object
+      required: [plugins]
+      properties:
+        plugins:
+          type: array
+          items: { $ref: "#/components/schemas/PluginSummary" }
+      additionalProperties: false
+
+    PluginDetails:
+      type: object
+      description: >-
+        Full plugin metadata. `config`, `pluginDir`, and `errorMessage` may contain credentials,
+        host filesystem paths, or private diagnostic details.
+      required:
+        - id
+        - name
+        - version
+        - description
+        - author
+        - license
+        - main
+        - source
+        - tags
+        - status
+        - enabled
+        - config
+        - configSchema
+        - hooks
+        - permissions
+        - pluginDir
+        - errorMessage
+        - installedAt
+        - updatedAt
+        - activatedAt
+      properties:
+        id: { type: string }
+        name: { type: string }
+        version: { type: string }
+        description: { type: [string, "null"] }
+        author: { type: [string, "null"] }
+        license: { type: string }
+        main: { type: string }
+        source: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        status: { type: string, enum: [installed, active, inactive, error] }
+        enabled: { type: boolean }
+        config:
+          type: object
+          x-sensitive: true
+          additionalProperties: true
+        configSchema:
+          type: object
+          additionalProperties: true
+        hooks:
+          type: array
+          items: { type: string }
+        permissions:
+          type: array
+          items: { type: string }
+        pluginDir:
+          type: string
+          x-sensitive: true
+          description: Absolute path in the server's managed plugin directory.
+        errorMessage:
+          type: [string, "null"]
+          x-sensitive: true
+        installedAt: { type: string }
+        updatedAt: { type: string }
+        activatedAt: { type: [string, "null"] }
+      additionalProperties: false
+
+    PluginDetailsResponse:
+      type: object
+      required: [plugin]
+      properties:
+        plugin:
+          allOf:
+            - { $ref: "#/components/schemas/PluginDetails" }
+          x-sensitive: true
+      additionalProperties: false
+
+    PluginLifecycleResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+      additionalProperties: false
+
+    PluginConfigResponse:
+      type: object
+      required: [config, configSchema]
+      properties:
+        config:
+          type: object
+          x-sensitive: true
+          additionalProperties: true
+        configSchema:
+          type: object
+          additionalProperties: true
+      additionalProperties: false
+
+    PluginConfigUpdateRequest:
+      type: object
+      required: [config]
+      properties:
+        config:
+          type: object
+          x-sensitive: true
+          additionalProperties: true
+      additionalProperties: true
+
+    PluginConfigUpdateResponse:
+      type: object
+      required: [success, config]
+      properties:
+        success: { type: boolean, const: true }
+        config:
+          type: object
+          x-sensitive: true
+          additionalProperties: true
+      additionalProperties: false
+
+    PluginLocalInstallRequest:
+      type: object
+      required: [path]
+      properties:
+        path:
+          type: string
+          minLength: 1
+          pattern: "^/"
+          x-sensitive: true
+          description: >-
+            Absolute local plugin directory path. The route rejects null bytes and any path
+            containing `..` before passing it to the installer.
+      additionalProperties: true
+
+    PluginInstallResponse:
+      type: object
+      required: [plugin]
+      properties:
+        plugin: { $ref: "#/components/schemas/PluginSummary" }
+      additionalProperties: false
+
+    PluginMarketplaceEntry:
+      type: object
+      description: >-
+        Seed entries include the documented fields. Custom registry entries are only validated to
+        have a string `name`; all other fields may be missing or registry-specific.
+      required: [name]
+      properties:
+        name: { type: string }
+        version: { type: string }
+        description: { type: string }
+        author: { type: string }
+        license: { type: string }
+        downloadUrl:
+          type: string
+          description: Can be an empty string for a seed entry.
+        checksum: { type: string }
+        repository: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        downloads: { type: number }
+        rating: { type: number, minimum: 0, maximum: 5 }
+        verified: { type: boolean }
+        lastUpdated: { type: string }
+      additionalProperties: true
+
+    PluginMarketplaceListResponse:
+      type: object
+      required: [plugins]
+      properties:
+        plugins:
+          type: array
+          items: { $ref: "#/components/schemas/PluginMarketplaceEntry" }
+      additionalProperties: false
+
+    PluginMarketplaceInstallRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1 }
+      additionalProperties: true
+
+    PluginMarketplaceInstallResponse:
+      type: object
+      required: [name, version]
+      properties:
+        name: { type: string }
+        version: { type: string }
+      additionalProperties: false
+
+    PluginScanError:
+      type: object
+      description: Filesystem/manifest diagnostics may reveal local paths; treat as sensitive.
+      required: [name, error]
+      properties:
+        name: { type: string }
+        error:
+          type: string
+          x-sensitive: true
+      additionalProperties: false
+
+    PluginScanResponse:
+      type: object
+      required: [discovered, errors]
+      properties:
+        discovered: { type: integer, minimum: 0 }
+        errors:
+          type: array
+          items: { $ref: "#/components/schemas/PluginScanError" }
       additionalProperties: false

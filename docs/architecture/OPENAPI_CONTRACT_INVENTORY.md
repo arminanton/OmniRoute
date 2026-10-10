@@ -10,8 +10,8 @@ Generated from `docs/openapi.yaml` by `npm run report:openapi-contract-inventory
 - Paths: 705
 - Operations: 1029
 - Body-bearing success-response candidates: 983
-- Candidates with a schema on every declared non-204 2xx response: 776 (78.94%)
-- Candidates with at least one missing/untyped non-204 2xx response: 207
+- Candidates with a schema on every declared non-204 2xx response: 787 (80.06%)
+- Candidates with at least one missing/untyped non-204 2xx response: 196
 - Bodyless 204-only operations: 16
 - HEAD operations: 8 (2 declare success statuses; 6 have no declared 2xx)
 - Operations with no declared 2xx response: 28
@@ -37,18 +37,18 @@ The candidate denominator excludes HEAD/OPTIONS, operations whose only success i
 | Missing response-content state | Status occurrences |
 | ------------------------------ | -----------------: |
 | content-without-schema         |                  0 |
-| no-content                     |                207 |
+| no-content                     |                196 |
 | unresolved-response            |                  0 |
 
 ## Security declarations
 
-- Operation-level declarations: 727
+- Operation-level declarations: 738
 - Inherited declarations: path=0, root=0
-- Missing effective declarations: 302
+- Missing effective declarations: 291
 - Invalid declarations: 0
 - Explicitly public (security: []): 8
 - Nonempty declarations requiring a named scheme: 151
-- Nonempty declarations including an anonymous empty-object alternative: 568
+- Nonempty declarations including an anonymous empty-object alternative: 579
 - Conditional-auth language detected in operation text: 221
 - Conditional-auth language with an effective security declaration: 221
 - Conditional-auth language with no effective security declaration: 0
