@@ -28,15 +28,20 @@ export function notifyFetchRequestStart(): void {
 }
 
 /** Preserve receiver/private-field semantics of Undici dispatchers and handlers. */
-export function observeFetchDispatcher(dispatcher: Dispatcher): Dispatcher {
+export function observeFetchDispatcher(
+  dispatcher: Dispatcher,
+  evidence?: Pick<FetchDispatchObserver, "queued" | "started">
+): Dispatcher {
   const observer = dispatchObserver.getStore();
-  if (!observer && !getRequestTransportTelemetry() && !getTransportAttempt()) return dispatcher;
+  if (!observer && !getRequestTransportTelemetry() && !getTransportAttempt() && !evidence)
+    return dispatcher;
 
   return new Proxy(dispatcher, {
     get(target, property) {
       if (property === "dispatch") {
         return (options: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler) => {
           const attempt = getTransportAttempt();
+          evidence?.queued();
           observer?.queued();
           attempt?.queued();
           const tracked = new Proxy(handler, {
@@ -44,13 +49,23 @@ export function observeFetchDispatcher(dispatcher: Dispatcher): Dispatcher {
               const value = Reflect.get(receiver, name, receiver);
               if (name === "onRequestStart") {
                 return (...args: unknown[]) => {
+                  evidence?.started();
                   observer?.started();
                   attempt?.dispatched();
                   if (typeof value === "function") return Reflect.apply(value, receiver, args);
                 };
               }
+              // These callbacks also establish that this is no longer a pristine
+              // queue failure, even for a dispatcher with different start hooks.
+              if (name === "onConnect" || name === "onHeaders") {
+                return (...args: unknown[]) => {
+                  evidence?.started();
+                  if (typeof value === "function") return Reflect.apply(value, receiver, args);
+                };
+              }
               if (name === "onBodySent" || name === "onRequestSent") {
                 return (...args: unknown[]) => {
+                  evidence?.started();
                   if (name === "onRequestSent") attempt?.requestSent();
                   else if (ArrayBuffer.isView(args[0])) attempt?.bodySent(args[0].byteLength);
                   if (typeof value === "function") return Reflect.apply(value, receiver, args);

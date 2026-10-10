@@ -1,7 +1,8 @@
 // @ts-nocheck
 import { waitForFetchRetry } from "./fetchRetryBackoff.ts";
 import {
-  canReplayGenerationDispatch,
+  canReplayHttpDispatch,
+  noteGenerationDispatchPhase,
   markUncertainGenerationAcceptance,
 } from "../services/generationReplay.ts";
 import { classifyUpstreamPolicyRejection } from "../services/upstreamPolicyRejection.ts";
@@ -990,7 +991,7 @@ async function patchedFetch(
         )
           throw error;
         if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
-        if (!canReplayGenerationDispatch(input, options, error))
+        if (!canReplayHttpDispatch(input, options, error))
           throw markUncertainGenerationAcceptance(error);
         const sessionHadCookies =
           !!error &&
@@ -1052,7 +1053,7 @@ async function patchedFetch(
           },
           _undiciDirect,
           directHeadersTimeoutMs,
-          !deps.undiciFetch
+          true
         );
       } catch (dispatcherError) {
         if (
@@ -1064,7 +1065,7 @@ async function patchedFetch(
         if (isCallerAbort(dispatcherError, getEffectiveSignal(input, options))) {
           throw dispatcherError;
         }
-        if (!canReplayGenerationDispatch(input, options, dispatcherError))
+        if (!canReplayHttpDispatch(input, options, dispatcherError))
           throw markUncertainGenerationAcceptance(dispatcherError);
         if (isDirectResponseStartTimeout(dispatcherError)) {
           if (attempt === 0 && maxAttempts > 1) {
@@ -1144,10 +1145,13 @@ async function patchedFetch(
               if (fallbackProxyUrl) {
                 try {
                   const dispatcher = createProxyDispatcher(fallbackProxyUrl);
-                  return await _undiciDirect(input, {
-                    ...options,
-                    dispatcher: observeFetchDispatcher(dispatcher),
-                  });
+                  return await directFetchWithBoundedResponseStart(
+                    input,
+                    { ...options, dispatcher: observeFetchDispatcher(dispatcher) },
+                    _undiciDirect,
+                    directHeadersTimeoutMs,
+                    true
+                  );
                 } catch (error) {
                   if (
                     isRuntimePolicyError(error) ||
@@ -1155,7 +1159,10 @@ async function patchedFetch(
                     classifyUpstreamPolicyRejection(error)
                   )
                     throw error;
-                  // Proxy also failed — fall through to native fetch
+                  if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
+                  if (!canReplayHttpDispatch(input, options, error))
+                    throw markUncertainGenerationAcceptance(error);
+                  // Only a safe-method or proven pre-send failure can try native fetch.
                 }
               }
             }
@@ -1173,6 +1180,9 @@ async function patchedFetch(
               classifyUpstreamPolicyRejection(nativeError)
             )
               throw nativeError;
+            if (isCallerAbort(nativeError, getEffectiveSignal(input, options))) throw nativeError;
+            if (!canReplayHttpDispatch(input, options, nativeError))
+              throw markUncertainGenerationAcceptance(nativeError);
             // Surface both dispatcher and native causes immediately.
             const detail = `dispatcher=[${describeFetchCause(dispatcherError)}] native=[${describeFetchCause(nativeError)}]`;
             console.warn(`[ProxyFetch] native fetch fallback ALSO failed: ${detail}`);
@@ -1268,7 +1278,7 @@ async function patchedFetch(
           classifyUpstreamPolicyRejection(relayError)
         )
           throw relayError;
-        if (!canReplayGenerationDispatch(input, options, relayError))
+        if (!canReplayHttpDispatch(input, options, relayError))
           throw markUncertainGenerationAcceptance(relayError);
         // #9158: classify an internal per-attempt timeout FIRST — a relay that
         // hangs past RELAY_FETCH_TIMEOUT_MS must fail fast as RELAY_TIMEOUT (504)
@@ -1355,7 +1365,7 @@ async function patchedFetch(
       )
         throw error;
       if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
-      if (!canReplayGenerationDispatch(input, options, error))
+      if (!canReplayHttpDispatch(input, options, error))
         throw markUncertainGenerationAcceptance(error);
       const sessionHadCookies =
         !!error &&
@@ -1392,14 +1402,28 @@ async function patchedFetch(
   const maxProxyAttempts = requiredProxyContext.getStore() || hasNonReplayableProxyBody ? 1 : 2;
   let lastProxyError: unknown = null;
   for (let attempt = 0; attempt < maxProxyAttempts; attempt++) {
+    let phase = "unknown";
+    let requestStarted: boolean | null = null;
+    const evidence = {
+      queued: () => {
+        phase = "transport_queue";
+        requestStarted = false;
+      },
+      started: () => {
+        phase = "headers";
+        requestStarted = true;
+      },
+    };
     try {
       return await _undiciProxy(input, {
         ...options,
         dispatcher: observeFetchDispatcher(
-          attempt === 0 ? createProxyDispatcher(proxyUrl) : getProxyRetryDispatcher(proxyUrl)
+          attempt === 0 ? createProxyDispatcher(proxyUrl) : getProxyRetryDispatcher(proxyUrl),
+          evidence
         ),
       });
     } catch (error) {
+      noteGenerationDispatchPhase(error, phase, requestStarted);
       if (
         isRuntimePolicyError(error) ||
         isLogicalRetryBudgetError(error) ||
@@ -1407,7 +1431,7 @@ async function patchedFetch(
       )
         throw error;
       if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
-      if (!canReplayGenerationDispatch(input, options, error))
+      if (!canReplayHttpDispatch(input, options, error))
         throw markUncertainGenerationAcceptance(error);
       const msg = error instanceof Error ? error.message : String(error);
       const errCode = (error as { code?: unknown })?.code;

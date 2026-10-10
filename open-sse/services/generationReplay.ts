@@ -1,4 +1,3 @@
-import { isGenerationHttpDispatch } from "./logicalRetryBudget.ts";
 import { getGenerationDispatchPhase } from "./generationDispatchEvidence.ts";
 export {
   noteGenerationDispatchPhase,
@@ -6,13 +5,21 @@ export {
   markUncertainGenerationAcceptance,
   isUncertainGenerationAcceptance,
 } from "./generationDispatchEvidence.ts";
-/** A serializable body/correlation ID is not evidence of upstream idempotency. */
-export function canReplayGenerationDispatch(
+/** Transport safety is independent of the chat-only logical retry budget. */
+export function canReplayHttpDispatch(
   input: unknown,
   options: { method?: string } | undefined,
   error: unknown
 ): boolean {
-  if (!isGenerationHttpDispatch(input, options)) return true;
+  const method = (
+    options?.method ??
+    (typeof Request !== "undefined" && input instanceof Request ? input.method : "GET")
+  ).toUpperCase();
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return true;
+  // A serializable body/correlation ID is not upstream idempotency evidence.
   const phase = getGenerationDispatchPhase(error);
   return phase?.requestStarted === false && phase.phase === "transport_queue";
 }
+
+/** Compatibility name for existing generation callers; no budget/classification changes. */
+export const canReplayGenerationDispatch = canReplayHttpDispatch;

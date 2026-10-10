@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Agent, type Dispatcher } from "undici";
 import { proxyFetch } from "../../open-sse/utils/proxyFetch.ts";
 import {
   LogicalRetryBudget,
@@ -36,7 +37,15 @@ test.after(() => {
 });
 
 for (const method of ["GET", "POST"])
-  test(`control-plane ${method} retries cannot consume an exhausted generation budget or admission hooks`, async () => {
+  test(`control-plane ${method} retries cannot consume an exhausted generation budget or admission hooks`, async (t) => {
+    // A POST can replay only when the actual dispatcher failed before start.
+    // Exercise the observer, rather than adding transport-looking fields to an error.
+    if (method === "POST") {
+      t.mock.method(Agent.prototype, "dispatch", (_options, handler) => {
+        handler.onError?.(transportFailure());
+        return true;
+      });
+    }
     const budget = new LogicalRetryBudget(1, Date.now() + 5000);
     budget.consumeAttempt();
     let calls = 0,
@@ -48,9 +57,19 @@ for (const method of ["GET", "POST"])
             "https://metadata.invalid/release",
             { method },
             {
-              undiciFetch: async () => {
+              undiciFetch: async (_input, init) => {
                 calls++;
-                if (calls === 1) throw transportFailure();
+                if (calls === 1) {
+                  if (method === "POST") {
+                    return new Promise<Response>((_resolve, reject) => {
+                      (init?.dispatcher as Dispatcher).dispatch(
+                        { origin: "https://metadata.invalid", path: "/release", method: "POST" },
+                        { onError: reject }
+                      );
+                    });
+                  }
+                  throw transportFailure();
+                }
                 return new Response("metadata");
               },
               nativeFetch: async () => {
