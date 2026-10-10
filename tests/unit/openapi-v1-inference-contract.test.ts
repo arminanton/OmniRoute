@@ -25,6 +25,7 @@ type Schema = {
 
 type OperationResponse = {
   $ref?: string;
+  headers?: Record<string, { $ref?: string; schema?: Schema }>;
   content?: Record<string, { schema?: Schema }>;
 };
 
@@ -44,6 +45,7 @@ type Operation = {
 type Contract = {
   paths: Record<string, Record<string, Operation>>;
   components: {
+    headers: Record<string, { schema?: Schema }>;
     schemas: Record<string, Schema>;
     responses: Record<string, OperationResponse>;
   };
@@ -444,4 +446,129 @@ test("specialty inference operations document route and upstream error responses
   assert.match(imageEditRoute, /HTTP_STATUS\.RATE_LIMITED/);
   assert.match(embeddingService, /HTTP_STATUS\.PAYMENT_REQUIRED/);
   assert.match(embeddingService, /HTTP_STATUS\.RATE_LIMITED/);
+});
+
+test("remaining media contracts describe inputs, auth, failures, catalog fields, and telemetry", () => {
+  const imageRequest = openapi.components.schemas.ImageGenerationRequest;
+  for (const property of ["image", "image_url", "imageUrls", "image_urls"]) {
+    assert.ok(imageRequest.properties?.[property], `image generation describes ${property}`);
+  }
+
+  const upscaleCatalog = openapi.paths["/api/v1/images/upscale"]?.get;
+  assert.ok(upscaleCatalog);
+  assert.equal(
+    responseSchema("/api/v1/images/upscale", "get").$ref,
+    "#/components/schemas/ImageUpscaleModelListResponse"
+  );
+  const upscaleModel = openapi.components.schemas.ImageUpscaleModel;
+  for (const property of ["factors", "supports_creativity", "supports_prompt", "prompt_required"]) {
+    assert.ok(upscaleModel.properties?.[property], `upscale catalog describes ${property}`);
+  }
+
+  const catalogRoutes = [
+    "/api/v1/images/generations",
+    "/api/v1/images/upscale",
+    "/api/v1/music/generations",
+    "/api/v1/videos/generations",
+  ];
+  for (const pathname of catalogRoutes) {
+    const get = openapi.paths[pathname]?.get;
+    assert.ok(get, `GET ${pathname} exists`);
+    assert.ok(
+      get.security?.some((alternative) => "ClientApiKeyAuth" in alternative),
+      `${pathname} documents x-api-key auth`
+    );
+    assert.ok(
+      get.security?.some((alternative) => "GoogleApiKeyAuth" in alternative),
+      `${pathname} documents x-goog-api-key auth`
+    );
+    assert.ok(get.responses?.["401"], `${pathname} documents auth rejection`);
+    assert.ok(get.responses?.["503"], `${pathname} documents unavailability`);
+  }
+
+  const mediaErrorStatuses = [
+    ["/api/v1/images/generations", ["400", "401", "403", "410", "429", "503", "default"]],
+    ["/api/v1/images/upscale", ["400", "401", "403", "429", "503", "default"]],
+    ["/api/v1/audio/speech", ["400", "401", "403", "429", "500", "503", "default"]],
+    [
+      "/api/v1/audio/transcriptions",
+      ["400", "401", "403", "413", "429", "499", "500", "503", "default"],
+    ],
+    ["/api/v1/audio/translations", ["400", "401", "403", "429", "500", "503", "default"]],
+  ] as const;
+  for (const [pathname, statuses] of mediaErrorStatuses) {
+    const post = openapi.paths[pathname]?.post;
+    assert.ok(post, `POST ${pathname} exists`);
+    for (const status of statuses) {
+      assert.ok(post.responses?.[status], `POST ${pathname} documents ${status}`);
+    }
+  }
+
+  const telemetryNames = [
+    "X-OmniRoute-Cache-Hit",
+    "X-OmniRoute-Decision",
+    "X-OmniRoute-Latency-Ms",
+    "X-OmniRoute-Model",
+    "X-OmniRoute-Provider",
+    "X-OmniRoute-Request-Id",
+    "X-OmniRoute-Response-Cost",
+    "X-OmniRoute-Tokens-In",
+    "X-OmniRoute-Tokens-Out",
+    "X-OmniRoute-Version",
+  ];
+  const mediaOperations = [
+    ["/api/v1/images/generations", "post"],
+    ["/api/v1/images/upscale", "post"],
+    ["/api/v1/audio/speech", "post"],
+    ["/api/v1/audio/transcriptions", "post"],
+    ["/api/v1/audio/translations", "post"],
+    ["/api/v1/music/generations", "post"],
+    ["/api/v1/videos/generations", "post"],
+  ] as const;
+  for (const [pathname, method] of mediaOperations) {
+    const headers = openapi.paths[pathname]?.[method]?.responses?.["200"]?.headers;
+    assert.ok(headers, `${method.toUpperCase()} ${pathname} documents telemetry headers`);
+    for (const name of telemetryNames) {
+      assert.ok(headers[name]?.$ref, `${pathname} documents ${name}`);
+    }
+  }
+  for (const pathname of [
+    "/api/v1/images/generations",
+    "/api/v1/audio/speech",
+    "/api/v1/videos/generations",
+  ]) {
+    assert.ok(
+      openapi.paths[pathname]?.post?.responses?.["200"]?.headers?.["X-OmniRoute-Fallback-Attempts"]
+        ?.$ref,
+      `${pathname} combo responses can report fallback attempts`
+    );
+  }
+
+  const translationRequest =
+    openapi.paths["/api/v1/audio/translations"]?.post?.requestBody?.content?.["multipart/form-data"]
+      ?.schema;
+  assert.ok(translationRequest?.properties?.response_format?.enum?.includes("verbose_json"));
+
+  const read = (...parts: string[]) => fs.readFileSync(path.join(process.cwd(), ...parts), "utf8");
+  const imageRoute = read("src/app/api/v1/images/generations/route.ts");
+  const upscaleRoute = read("src/app/api/v1/images/upscale/route.ts");
+  const speechRoute = read("src/app/api/v1/audio/speech/route.ts");
+  const transcriptionRoute = read("src/app/api/v1/audio/transcriptions/route.ts");
+  const translationRoute = read("src/app/api/v1/audio/translations/route.ts");
+  const translationHandler = read("open-sse/handlers/audioTranslation.ts");
+  const mediaRouteHelper = read("src/app/api/v1/_shared/mediaGenerationRoute.ts");
+  assert.match(imageRoute, /body\.image_url|body\.imageUrls|body\.image_urls/);
+  assert.match(upscaleRoute, /supports_creativity|prompt_required/);
+  for (const [source, name] of [
+    [imageRoute, "image generation"],
+    [upscaleRoute, "upscale"],
+    [speechRoute, "speech"],
+    [transcriptionRoute, "transcription"],
+    [translationRoute, "translation"],
+    [mediaRouteHelper, "music/video"],
+  ] as const) {
+    assert.ok(source.includes("attachOmniRouteMeta"), `${name} attaches metadata headers`);
+  }
+  assert.match(translationRoute, /policy\.rejection/);
+  assert.match(translationHandler, /\["prompt", "response_format", "temperature"\]/);
 });

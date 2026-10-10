@@ -2209,6 +2209,8 @@ paths:
         API key or authenticated dashboard session is required.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
         - {}
       responses:
@@ -2218,6 +2220,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ModelListResponse"
+        "401":
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
     post:
       operationId: postApiV1ImagesGenerations
       tags: [Images]
@@ -2245,10 +2251,40 @@ paths:
             cost-telemetry headers (see `POST /api/v1/chat/completions`); image
             cost is computed per image when pricing is available, otherwise `0`
             (fail-open).
+          headers:
+            X-OmniRoute-Cache-Hit: { $ref: "#/components/headers/OmniRouteCacheHit" }
+            X-OmniRoute-Decision: { $ref: "#/components/headers/OmniRouteDecision" }
+            X-OmniRoute-Fallback-Attempts:
+              { $ref: "#/components/headers/OmniRouteFallbackAttempts" }
+            X-OmniRoute-Latency-Ms: { $ref: "#/components/headers/OmniRouteLatencyMs" }
+            X-OmniRoute-Model: { $ref: "#/components/headers/OmniRouteModel" }
+            X-OmniRoute-Provider: { $ref: "#/components/headers/OmniRouteProvider" }
+            X-OmniRoute-Request-Id: { $ref: "#/components/headers/OmniRouteRequestId" }
+            X-OmniRoute-Response-Cost: { $ref: "#/components/headers/OmniRouteResponseCost" }
+            X-OmniRoute-Tokens-In: { $ref: "#/components/headers/OmniRouteTokensIn" }
+            X-OmniRoute-Tokens-Out: { $ref: "#/components/headers/OmniRouteTokensOut" }
+            X-OmniRoute-Version: { $ref: "#/components/headers/OmniRouteVersion" }
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ImageGenerationResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "403":
+          $ref: "#/components/responses/InferenceForbidden"
+        "410":
+          description: The requested image model or provider has been retired.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        default:
+          $ref: "#/components/responses/InferenceProviderError"
 
   /api/v1/providers/{provider}/images/generations:
     post:
@@ -2309,17 +2345,22 @@ paths:
               properties:
                 input:
                   type: string
+                  minLength: 1
+                  pattern: "\\S"
                 model:
                   type: string
+                  minLength: 1
+                  maxLength: 200
                 voice:
                   type: string
                 response_format:
                   type: string
                   description: Provider-supported audio format (commonly mp3, wav, opus, ogg, or pcm).
                 speed:
-                  type: number
-                  minimum: 0.25
-                  maximum: 4
+                  oneOf:
+                    - type: number
+                    - type: string
+                  description: Provider-supported speed value; accepted range varies by provider.
               additionalProperties: true
       responses:
         "200":
@@ -2328,11 +2369,38 @@ paths:
             cost-telemetry headers (see `POST /api/v1/chat/completions`); speech
             cost is computed per character when pricing is available, otherwise
             `0` (fail-open).
+          headers:
+            X-OmniRoute-Cache-Hit: { $ref: "#/components/headers/OmniRouteCacheHit" }
+            X-OmniRoute-Decision: { $ref: "#/components/headers/OmniRouteDecision" }
+            X-OmniRoute-Fallback-Attempts:
+              { $ref: "#/components/headers/OmniRouteFallbackAttempts" }
+            X-OmniRoute-Latency-Ms: { $ref: "#/components/headers/OmniRouteLatencyMs" }
+            X-OmniRoute-Model: { $ref: "#/components/headers/OmniRouteModel" }
+            X-OmniRoute-Provider: { $ref: "#/components/headers/OmniRouteProvider" }
+            X-OmniRoute-Request-Id: { $ref: "#/components/headers/OmniRouteRequestId" }
+            X-OmniRoute-Response-Cost: { $ref: "#/components/headers/OmniRouteResponseCost" }
+            X-OmniRoute-Tokens-In: { $ref: "#/components/headers/OmniRouteTokensIn" }
+            X-OmniRoute-Tokens-Out: { $ref: "#/components/headers/OmniRouteTokensOut" }
+            X-OmniRoute-Version: { $ref: "#/components/headers/OmniRouteVersion" }
           content:
             audio/*:
               schema: { type: string, format: binary }
             application/octet-stream:
               schema: { type: string, format: binary }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "403":
+          $ref: "#/components/responses/InferenceForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        default:
+          $ref: "#/components/responses/InferenceProviderError"
 
   /api/v1/audio/transcriptions:
     post:
@@ -2375,6 +2443,17 @@ paths:
             cost-telemetry headers (see `POST /api/v1/chat/completions`);
             transcription cost is computed per second when pricing is available,
             otherwise `0` (fail-open).
+          headers:
+            X-OmniRoute-Cache-Hit: { $ref: "#/components/headers/OmniRouteCacheHit" }
+            X-OmniRoute-Decision: { $ref: "#/components/headers/OmniRouteDecision" }
+            X-OmniRoute-Latency-Ms: { $ref: "#/components/headers/OmniRouteLatencyMs" }
+            X-OmniRoute-Model: { $ref: "#/components/headers/OmniRouteModel" }
+            X-OmniRoute-Provider: { $ref: "#/components/headers/OmniRouteProvider" }
+            X-OmniRoute-Request-Id: { $ref: "#/components/headers/OmniRouteRequestId" }
+            X-OmniRoute-Response-Cost: { $ref: "#/components/headers/OmniRouteResponseCost" }
+            X-OmniRoute-Tokens-In: { $ref: "#/components/headers/OmniRouteTokensIn" }
+            X-OmniRoute-Tokens-Out: { $ref: "#/components/headers/OmniRouteTokensOut" }
+            X-OmniRoute-Version: { $ref: "#/components/headers/OmniRouteVersion" }
           content:
             application/json:
               schema:
@@ -2387,6 +2466,30 @@ paths:
               schema: { type: string }
             text/srt:
               schema: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "403":
+          $ref: "#/components/responses/InferenceForbidden"
+        "413":
+          description: Audio upload exceeds the configured body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "499":
+          description: The client aborted the transcription request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        default:
+          $ref: "#/components/responses/InferenceProviderError"
 
   /api/v1/moderations:
     post:
@@ -17605,12 +17708,23 @@ paths:
                 prompt: { type: string }
                 response_format:
                   type: string
-                  enum: [json, text, srt, vtt]
+                  enum: [json, text, srt, verbose_json, vtt]
                 temperature: { type: number, minimum: 0, maximum: 1 }
               additionalProperties: true
       responses:
         "200":
           description: English translation of the audio.
+          headers:
+            X-OmniRoute-Cache-Hit: { $ref: "#/components/headers/OmniRouteCacheHit" }
+            X-OmniRoute-Decision: { $ref: "#/components/headers/OmniRouteDecision" }
+            X-OmniRoute-Latency-Ms: { $ref: "#/components/headers/OmniRouteLatencyMs" }
+            X-OmniRoute-Model: { $ref: "#/components/headers/OmniRouteModel" }
+            X-OmniRoute-Provider: { $ref: "#/components/headers/OmniRouteProvider" }
+            X-OmniRoute-Request-Id: { $ref: "#/components/headers/OmniRouteRequestId" }
+            X-OmniRoute-Response-Cost: { $ref: "#/components/headers/OmniRouteResponseCost" }
+            X-OmniRoute-Tokens-In: { $ref: "#/components/headers/OmniRouteTokensIn" }
+            X-OmniRoute-Tokens-Out: { $ref: "#/components/headers/OmniRouteTokensOut" }
+            X-OmniRoute-Version: { $ref: "#/components/headers/OmniRouteVersion" }
           content:
             application/json:
               schema:
@@ -17626,9 +17740,17 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/InferenceUnauthorized"
         "500":
           $ref: "#/components/responses/InternalError"
+        "403":
+          $ref: "#/components/responses/InferenceForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        default:
+          $ref: "#/components/responses/InferenceProviderError"
   /api/v1/voices:
     get:
       operationId: getApiV1Voices
@@ -41084,9 +41206,14 @@ paths:
       tags:
         - V1 Images
       summary: "GET images › upscale"
-      description: Image-upscale model catalog; authentication follows the configured model-catalog policy.
+      description: >-
+        Returns the instance's registered upscale models and their supported factors and
+        controls. Authentication follows the CLIENT_API policy; anonymous access is
+        available only when REQUIRE_API_KEY is disabled.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
         - {}
       responses:
@@ -41095,7 +41222,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ModelListResponse"
+                $ref: "#/components/schemas/ImageUpscaleModelListResponse"
+        "401":
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
     post:
       operationId: postApiV1ImagesUpscale
       tags:
@@ -41131,10 +41262,33 @@ paths:
       responses:
         "200":
           description: Upscaled image result.
+          headers:
+            X-OmniRoute-Cache-Hit: { $ref: "#/components/headers/OmniRouteCacheHit" }
+            X-OmniRoute-Decision: { $ref: "#/components/headers/OmniRouteDecision" }
+            X-OmniRoute-Latency-Ms: { $ref: "#/components/headers/OmniRouteLatencyMs" }
+            X-OmniRoute-Model: { $ref: "#/components/headers/OmniRouteModel" }
+            X-OmniRoute-Provider: { $ref: "#/components/headers/OmniRouteProvider" }
+            X-OmniRoute-Request-Id: { $ref: "#/components/headers/OmniRouteRequestId" }
+            X-OmniRoute-Response-Cost: { $ref: "#/components/headers/OmniRouteResponseCost" }
+            X-OmniRoute-Tokens-In: { $ref: "#/components/headers/OmniRouteTokensIn" }
+            X-OmniRoute-Tokens-Out: { $ref: "#/components/headers/OmniRouteTokensOut" }
+            X-OmniRoute-Version: { $ref: "#/components/headers/OmniRouteVersion" }
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ImageGenerationResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "403":
+          $ref: "#/components/responses/InferenceForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        default:
+          $ref: "#/components/responses/InferenceProviderError"
   /api/v1/issues/report:
     post:
       operationId: postApiV1IssuesReport
@@ -41731,6 +41885,8 @@ paths:
       description: Authentication follows the shared unified model-catalog access policy.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
         - {}
       responses:
@@ -41771,6 +41927,17 @@ paths:
       responses:
         "200":
           description: Provider-native music result, commonly an array of audio URLs or base64 artifacts.
+          headers:
+            X-OmniRoute-Cache-Hit: { $ref: "#/components/headers/OmniRouteCacheHit" }
+            X-OmniRoute-Decision: { $ref: "#/components/headers/OmniRouteDecision" }
+            X-OmniRoute-Latency-Ms: { $ref: "#/components/headers/OmniRouteLatencyMs" }
+            X-OmniRoute-Model: { $ref: "#/components/headers/OmniRouteModel" }
+            X-OmniRoute-Provider: { $ref: "#/components/headers/OmniRouteProvider" }
+            X-OmniRoute-Request-Id: { $ref: "#/components/headers/OmniRouteRequestId" }
+            X-OmniRoute-Response-Cost: { $ref: "#/components/headers/OmniRouteResponseCost" }
+            X-OmniRoute-Tokens-In: { $ref: "#/components/headers/OmniRouteTokensIn" }
+            X-OmniRoute-Tokens-Out: { $ref: "#/components/headers/OmniRouteTokensOut" }
+            X-OmniRoute-Version: { $ref: "#/components/headers/OmniRouteVersion" }
           content:
             application/json:
               schema:
@@ -42580,6 +42747,8 @@ paths:
       description: Authentication follows the shared unified model-catalog access policy.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
         - {}
       responses:
@@ -42621,6 +42790,19 @@ paths:
       responses:
         "200":
           description: Provider-native video result, commonly an array of video URLs or base64 artifacts.
+          headers:
+            X-OmniRoute-Cache-Hit: { $ref: "#/components/headers/OmniRouteCacheHit" }
+            X-OmniRoute-Decision: { $ref: "#/components/headers/OmniRouteDecision" }
+            X-OmniRoute-Fallback-Attempts:
+              { $ref: "#/components/headers/OmniRouteFallbackAttempts" }
+            X-OmniRoute-Latency-Ms: { $ref: "#/components/headers/OmniRouteLatencyMs" }
+            X-OmniRoute-Model: { $ref: "#/components/headers/OmniRouteModel" }
+            X-OmniRoute-Provider: { $ref: "#/components/headers/OmniRouteProvider" }
+            X-OmniRoute-Request-Id: { $ref: "#/components/headers/OmniRouteRequestId" }
+            X-OmniRoute-Response-Cost: { $ref: "#/components/headers/OmniRouteResponseCost" }
+            X-OmniRoute-Tokens-In: { $ref: "#/components/headers/OmniRouteTokensIn" }
+            X-OmniRoute-Tokens-Out: { $ref: "#/components/headers/OmniRouteTokensOut" }
+            X-OmniRoute-Version: { $ref: "#/components/headers/OmniRouteVersion" }
           content:
             application/json:
               schema:
@@ -45623,6 +45805,41 @@ components:
       in: header
       name: x-goog-api-key
       description: Google client SDK API key header accepted by the client API auth policy.
+
+  headers:
+    OmniRouteCacheHit:
+      description: Whether this response was served from cache.
+      schema: { type: string, enum: ["true", "false"] }
+    OmniRouteDecision:
+      description: Routing decision trace including strategy/provider and handler latency.
+      schema: { type: string }
+    OmniRouteFallbackAttempts:
+      description: Number of fallback attempts; present only when greater than zero.
+      schema: { type: string }
+    OmniRouteLatencyMs:
+      description: Handler latency in milliseconds.
+      schema: { type: string }
+    OmniRouteModel:
+      description: Resolved model.
+      schema: { type: string }
+    OmniRouteProvider:
+      description: Resolved provider alias.
+      schema: { type: string }
+    OmniRouteRequestId:
+      description: Request correlation identifier.
+      schema: { type: string }
+    OmniRouteResponseCost:
+      description: Request cost in USD, fixed to ten decimal places.
+      schema: { type: string }
+    OmniRouteTokensIn:
+      description: Input token count (zero for modalities without token usage data).
+      schema: { type: string }
+    OmniRouteTokensOut:
+      description: Output token count (zero for modalities without token usage data).
+      schema: { type: string }
+    OmniRouteVersion:
+      description: OmniRoute build version.
+      schema: { type: string }
 
   parameters:
     ResourceId:
@@ -56465,10 +56682,26 @@ components:
       type: object
       required: [model]
       properties:
-        model: { type: string }
+        model: { type: string, minLength: 1, maxLength: 200 }
         prompt:
           type: string
+          minLength: 1
+          pattern: "\\S"
           description: Optional for providers whose image-edit/generation mode accepts structured inputs.
+        image:
+          type: string
+          description: Image URL, data URL, or provider-native encoded image for image-conditioned generation.
+        image_url:
+          type: string
+          description: Image URL or data URL for image-conditioned generation.
+        imageUrls:
+          type: array
+          items: { type: string }
+          description: Image URLs or data URLs for image-conditioned generation.
+        image_urls:
+          type: array
+          items: { type: string }
+          description: Image URLs or data URLs for image-conditioned generation.
         n:
           type: integer
           minimum: 1
@@ -56485,8 +56718,8 @@ components:
       type: object
       required: [model]
       properties:
-        model: { type: string }
-        prompt: { type: string }
+        model: { type: string, minLength: 1, maxLength: 200 }
+        prompt: { type: string, minLength: 1, description: Required by models whose registry entry sets `prompt_required`. }
         image:
           oneOf:
             - type: string
@@ -56515,6 +56748,55 @@ components:
         - required: [image]
         - required: [image_url]
         - required: [image_urls]
+      additionalProperties: true
+
+    ImageUpscaleModel:
+      type: object
+      required:
+        [
+          id,
+          object,
+          owned_by,
+          name,
+          type,
+          subtype,
+          input_modalities,
+          output_modalities,
+          factors,
+          supports_creativity,
+          supports_prompt,
+          prompt_required,
+        ]
+      properties:
+        id: { type: string }
+        object: { type: string, const: model }
+        owned_by: { type: string }
+        name: { type: string }
+        type: { type: string, const: image }
+        subtype: { type: string, const: upscale }
+        input_modalities:
+          type: array
+          items: { type: string, const: image }
+        output_modalities:
+          type: array
+          items: { type: string, const: image }
+        factors:
+          type: array
+          items: { type: number, minimum: 1 }
+        supports_creativity: { type: boolean }
+        supports_prompt: { type: boolean }
+        prompt_required: { type: boolean }
+        description: { type: string }
+      additionalProperties: true
+
+    ImageUpscaleModelListResponse:
+      type: object
+      required: [object, data]
+      properties:
+        object: { type: string, const: list }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ImageUpscaleModel" }
       additionalProperties: true
 
     AudioTranscriptionResponse:
