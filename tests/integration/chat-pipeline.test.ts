@@ -23,6 +23,7 @@ const { encodeSkillToolName } = await import("../../src/lib/skills/injection.ts"
 const { handleChat } = await import("../../src/sse/handlers/chat.ts");
 const { initTranslators } = await import("../../open-sse/translator/index.ts");
 const { clearInflight } = await import("../../open-sse/services/requestDedup.ts");
+const accountRequestOccupancy = await import("../../open-sse/services/accountRequestOccupancy.ts");
 const { setCliCompatProviders } = await import("../../open-sse/config/cliFingerprints.ts");
 const { BaseExecutor } = await import("../../open-sse/executors/base.ts");
 const { getCodexClientVersion } = await import("../../open-sse/config/codexClient.ts");
@@ -516,7 +517,7 @@ test.after(async () => {
 });
 
 test("chat pipeline handles OpenAI passthrough with valid API key auth", async () => {
-  await seedConnection("openai", { apiKey: "sk-openai-primary" });
+  const connection = await seedConnection("openai", { apiKey: "sk-openai-primary" });
   const apiKey = await seedApiKey();
   const fetchCalls: FetchCall[] = [];
 
@@ -548,6 +549,7 @@ test("chat pipeline handles OpenAI passthrough with valid API key auth", async (
   assert.equal(fetchCalls[0].headers.Authorization, "Bearer sk-openai-primary");
   assert.equal(fetchCalls[0].body.messages[0].content, "Hello OpenAI");
   assert.equal(json.choices[0].message.content, "OpenAI passthrough");
+  assert.equal(accountRequestOccupancy.getAccountRequestInFlightCount(connection.id), 0);
 });
 
 test("chat pipeline persists Codex responses cache and reasoning tokens to call logs", async () => {
