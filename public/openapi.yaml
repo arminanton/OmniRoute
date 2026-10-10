@@ -10980,8 +10980,14 @@ paths:
       operationId: postApiAuthLogin
       tags: [System]
       summary: Authenticate user
+      description: >-
+        Explicitly public password-login endpoint. The management password is authenticated from
+        the request body and protected by the login-attempt guard; successful login sets the
+        dashboard `auth_token` cookie. This endpoint does not use Bearer or API-key authentication.
+      security: []
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema:
@@ -10989,8 +10995,10 @@ paths:
       responses:
         "200":
           description: Dashboard session created; the JWT is set in an HttpOnly cookie.
+          x-sensitive: true
           headers:
             Set-Cookie:
+              x-sensitive: true
               description: Sets the auth_token cookie for a 30-day dashboard session.
               schema: { type: string }
           content:
@@ -11002,7 +11010,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ValidationErrorResponse"
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "401":
           description: Invalid password
           content:
@@ -11037,11 +11047,17 @@ paths:
       operationId: postApiAuthLogout
       tags: [System]
       summary: Log out
+      description: >-
+        Explicitly public endpoint that expires the caller's `auth_token` cookie. It succeeds
+        without an existing dashboard session and does not require a Bearer credential.
+      security: []
       responses:
         "200":
           description: Clears the auth_token cookie; does not require a prior session.
+          x-sensitive: true
           headers:
             Set-Cookie:
+              x-sensitive: true
               description: Expires the auth_token cookie.
               schema: { type: string }
           content:
@@ -11059,11 +11075,20 @@ paths:
         via `{issuer}/.well-known/openid-configuration`, falling back to `{issuer}/authorize`),
         sets a short-lived `oidc_state` cookie, and redirects the browser. Password login
         remains available as a fallback while OIDC is enabled.
+      security: []
       responses:
         "302":
           description: Redirect to the identity provider's authorization endpoint
+          headers:
+            Set-Cookie:
+              x-sensitive: true
+              description: Short-lived HttpOnly oidc_state cookie used to verify the callback.
+              schema: { type: string }
         "400":
           description: OIDC is not configured (missing issuer, client id/secret, or disabled)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
 
   /api/auth/oidc/callback:
     get:
@@ -11076,15 +11101,18 @@ paths:
         if `oidcAllowedSubjects` is configured — checks the token's `sub`/`email` against
         that allowlist. On success it mints the same 30-day `auth_token` dashboard-session
         JWT used by password login and redirects to `/dashboard`.
+      security: []
       parameters:
         - name: code
           in: query
           required: true
+          x-sensitive: true
           schema:
             type: string
         - name: state
           in: query
           required: true
+          x-sensitive: true
           schema:
             type: string
       responses:
@@ -11093,6 +11121,12 @@ paths:
             Redirect to `/dashboard` on success, or to
             `/login?oidc_error={missing_code|invalid_state|not_configured|token_exchange|token_response|no_id_token|subject_not_allowed|id_token_invalid|server_misconfigured}`
             on failure.
+          x-sensitive: true
+          headers:
+            Set-Cookie:
+              x-sensitive: true
+              description: On successful authentication, sets the 30-day HttpOnly auth_token session cookie.
+              schema: { type: string }
 
   /api/init:
     get:
@@ -16619,6 +16653,19 @@ paths:
       tags:
         - Analytics
       summary: "GET analytics › auto routing"
+      description: >-
+        Returns auto-routing usage totals, variant counts, and top providers. A management
+        credential is required while management authentication is enabled; an unlocked deployment
+        with `requireLogin=false` may permit anonymous access, and first-run loopback setup behavior
+        may also apply. This route is not in the explicit public API allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Auto-routing usage totals, variant counts, and top providers; query failures fall back to zeroed aggregates.
@@ -16637,6 +16684,19 @@ paths:
       tags:
         - Analytics
       summary: "GET analytics › compression"
+      description: >-
+        Returns aggregate compression analytics for the selected time window. A management
+        credential is required while management authentication is enabled; an unlocked deployment
+        with `requireLogin=false` may permit anonymous access, and first-run loopback setup behavior
+        may also apply. This route is not in the explicit public API allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Compression totals for the selected time window.
@@ -18306,6 +18366,8 @@ paths:
       - name: token
         in: path
         required: true
+        description: Single-use Codex device-flow ticket; treat this URL capability as secret.
+        x-sensitive: true
         schema:
           type: string
     get:
@@ -18313,17 +18375,79 @@ paths:
       tags:
         - Codex
       summary: "GET codex › connect › <token>"
+      description: >-
+        Explicitly public device-flow ticket check. The path token is a single-use capability
+        ticket, not an API key; this route is in the public Codex connect allowlist and does not
+        accept dashboard/Bearer authentication.
+      security: []
       responses:
         "200":
-          description: OK
+          description: Ticket validity, provider, and expiry for the public connect page.
+        "404":
+          description: Ticket is invalid, expired, already used, or belongs to another provider.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [valid, error]
+                properties:
+                  valid: { type: boolean, const: false }
+                  error: { type: string }
+                additionalProperties: false
     post:
       operationId: postApiCodexConnectByToken
       tags:
         - Codex
       summary: "POST codex › connect › <token>"
+      description: >-
+        Explicitly public device-flow completion. The single-use path ticket authorizes this
+        operation; the request body carries OAuth token material which is finalized and persisted
+        as a Codex provider connection. The ticket is claimed before persistence to prevent
+        concurrent or repeated completion.
+      security: []
+      requestBody:
+        required: true
+        x-sensitive: true
+        description: OAuth completion token payload; access, refresh, and ID tokens are secrets.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OAuthDeviceCompleteRequest" }
       responses:
         "200":
-          description: OK
+          description: Codex connection persisted; includes its identifier and account label.
+          x-sensitive: true
+        "400":
+          description: Invalid JSON body or OAuth completion payload.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  success: { type: boolean }
+                  error: { type: string }
+        "410":
+          description: Single-use ticket is invalid, expired, or already claimed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, error]
+                properties:
+                  success: { type: boolean, const: false }
+                  error: { type: string }
+                additionalProperties: false
+        "500":
+          description: OAuth tokens could not be finalized or the provider connection could not be persisted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, error]
+                properties:
+                  success: { type: boolean, const: false }
+                  error: { type: string }
+                additionalProperties: false
   /api/combos/auto:
     get:
       operationId: getApiCombosAuto
@@ -18465,36 +18589,263 @@ paths:
       tags:
         - Compression
       summary: "POST compression › compare"
+      description: >-
+        Benchmarks the supplied conversation messages with selected local compression engines.
+        A management credential is required while management authentication is enabled; an
+        unlocked deployment with `requireLogin=false` may permit anonymous access, and first-run
+        loopback setup behavior may also apply. Messages can contain prompt data and are sensitive.
+        This route is not in the explicit public API allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messages]
+              properties:
+                messages:
+                  type: array
+                  minItems: 1
+                  x-sensitive: true
+                  items:
+                    type: object
+                    required: [role, content]
+                    properties:
+                      role: { type: string }
+                      content:
+                        x-sensitive: true
+                        oneOf:
+                          - { type: string }
+                          - { type: array, items: {} }
+                    additionalProperties: true
+                engineIds:
+                  type: array
+                  minItems: 1
+                  items: { type: string }
+              additionalProperties: false
       responses:
         "200":
-          description: OK
+          description: Comparison rows for the selected compression engines.
+        "400":
+          description: Invalid JSON body or message/engine selection failed validation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - type: object
+                    required: [error, details]
+                    properties:
+                      error: { type: string }
+                      details: { type: array, items: { type: object, additionalProperties: true } }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Comparison failed while running the selected engines.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, details]
+                properties:
+                  error: { type: string }
+                  details: { type: string }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/compression/compare/verify:
     post:
       operationId: postApiCompressionCompareVerify
       tags:
         - Compression
       summary: "POST compression › compare › verify"
+      description: >-
+        Sends the supplied original and compressed text samples to a priced judge model using
+        credentials for the selected provider. A management credential is required while
+        management authentication is enabled; an unlocked deployment with `requireLogin=false`
+        may permit anonymous access, and first-run loopback setup behavior may also apply. The
+        payload is sensitive and may incur provider cost up to the requested `$5` cap (default
+        `$0.10`). This route is not in the explicit public API allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items, provider, judgeModel]
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  maxItems: 20
+                  x-sensitive: true
+                  items:
+                    type: object
+                    required: [id, original, compressed]
+                    properties:
+                      id: { type: string }
+                      original: { type: string, x-sensitive: true }
+                      compressed: { type: string, x-sensitive: true }
+                    additionalProperties: false
+                provider: { type: string, minLength: 1 }
+                judgeModel: { type: string, minLength: 1 }
+                costCapUsd: { type: number, exclusiveMinimum: 0, maximum: 5, default: 0.1 }
+              additionalProperties: false
       responses:
         "200":
-          description: OK
+          description: Fidelity-verification results for the submitted samples.
+          x-sensitive: true
+        "400":
+          description: Invalid JSON, request validation failure, or provider credentials are missing.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - type: object
+                    required: [error, details]
+                    properties:
+                      error: { type: string }
+                      details: { type: array, items: { type: object, additionalProperties: true } }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Fidelity verification failed while using the configured judge provider.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, details]
+                properties:
+                  error: { type: string }
+                  details: { type: string }
+        "503":
+          description: Management authentication or selected provider credentials are unavailable.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
   /api/compression/engines:
     get:
       operationId: getApiCompressionEngines
       tags:
         - Compression
       summary: "GET compression › engines"
+      description: >-
+        Lists registered local compression engines and their configuration schemas. A management
+        credential is required while management authentication is enabled; an unlocked deployment
+        with `requireLogin=false` may permit anonymous access, and first-run loopback setup behavior
+        may also apply. This route is not in the explicit public API allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Registered engines and their configuration metadata.
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/compression/retrieve:
     post:
       operationId: postApiCompressionRetrieve
       tags:
         - Compression
       summary: "POST compression › retrieve"
+      description: >-
+        Retrieves a previously cached compression block by hash, with optional slicing, grep,
+        or statistics mode. The returned block may contain prompt text and is sensitive. A
+        management credential is required while management authentication is enabled; an unlocked
+        deployment with `requireLogin=false` may permit anonymous access, and first-run loopback
+        setup behavior may also apply. This route is not in the explicit public API allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [hash]
+              properties:
+                hash: { type: string, minLength: 6, maxLength: 64 }
+                mode: { type: string, enum: [full, head, tail, lines, grep, stats] }
+                n: { type: integer, minimum: 1, maximum: 10000 }
+                start: { type: integer, minimum: 1 }
+                end: { type: integer, minimum: 1 }
+                pattern: { type: string, maxLength: 512 }
+                unique: { type: boolean }
+              additionalProperties: false
       responses:
         "200":
-          description: OK
+          description: Cache lookup result; a successful `block` contains sensitive prompt-derived text.
+          x-sensitive: true
+        "400":
+          description: Invalid JSON body or retrieval parameters failed validation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - type: object
+                    required: [error, details]
+                    properties:
+                      error: { type: string }
+                      details: { type: array, items: { type: object, additionalProperties: true } }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Cached block retrieval or query failed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, details]
+                properties:
+                  error: { type: string }
+                  details: { type: string }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/conductor/ask:
     post:
       operationId: postApiConductorAsk
@@ -18723,9 +19074,36 @@ paths:
       tags:
         - Context
       summary: "GET context › analytics"
+      description: >-
+        Alias of the compression analytics handler. A management credential is required while
+        management authentication is enabled; an unlocked deployment with `requireLogin=false`
+        may permit anonymous access, and first-run loopback setup behavior may also apply. This
+        route is not in the explicit public API allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Compression analytics totals for the selected time window.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionAnalyticsSummaryResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Compression analytics could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/context/analytics/engine:
     get:
       operationId: getApiContextAnalyticsEngine
@@ -18741,17 +19119,58 @@ paths:
       tags:
         - Context
       summary: "GET context › caveman › config"
+      description: >-
+        Alias for the global compression-settings read. When authentication is required, the
+        legacy `isAuthenticated()` handler accepts a dashboard session or a management API key
+        with `manage`/`admin` scope; it does not accept `oma_live_` Access Tokens. An unlocked
+        installation with `requireLogin=false` or first-run loopback setup may permit anonymous
+        access. This operation is not in the explicit public API allowlist and is not LOCAL_ONLY.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Global compression and Caveman configuration.
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiContextCavemanConfig
       tags:
         - Context
       summary: "PUT context › caveman › config"
+      description: >-
+        Alias for updating global compression/Caveman settings. When authentication is required,
+        the legacy `isAuthenticated()` handler accepts a dashboard session or a management API
+        key with `manage`/`admin` scope; it does not accept `oma_live_` Access Tokens. An unlocked
+        installation with `requireLogin=false` or first-run loopback setup may permit anonymous
+        access. This operation is not in the explicit public API allowlist and is not LOCAL_ONLY.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Updated global compression and Caveman configuration.
+        "400":
+          description: Invalid JSON body or compression configuration update failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/context/combos:
     get:
       operationId: getApiContextCombos
@@ -40076,11 +40495,12 @@ components:
       additionalProperties: true
     OAuthDeviceCompleteRequest:
       type: object
+      x-sensitive: true
       required: [access_token]
       properties:
-        access_token: { type: string, minLength: 1, writeOnly: true }
-        refresh_token: { type: string, writeOnly: true }
-        id_token: { type: string, writeOnly: true }
+        access_token: { type: string, minLength: 1, writeOnly: true, x-sensitive: true }
+        refresh_token: { type: string, writeOnly: true, x-sensitive: true }
+        id_token: { type: string, writeOnly: true, x-sensitive: true }
         expires_in: { type: integer, minimum: 1 }
         connectionId: { type: string }
       additionalProperties: true
@@ -54204,7 +54624,7 @@ components:
       type: object
       required: [password]
       properties:
-        password: { type: string, minLength: 1, maxLength: 200 }
+        password: { type: string, minLength: 1, maxLength: 200, writeOnly: true, x-sensitive: true }
       additionalProperties: true
 
     AuthLoginForbiddenResponse:

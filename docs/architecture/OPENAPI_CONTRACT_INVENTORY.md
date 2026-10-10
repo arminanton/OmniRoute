@@ -10,8 +10,8 @@ Generated from `docs/openapi.yaml` by `npm run report:openapi-contract-inventory
 - Paths: 705
 - Operations: 1029
 - Body-bearing success-response candidates: 983
-- Candidates with a schema on every declared non-204 2xx response: 833 (84.74%)
-- Candidates with at least one missing/untyped non-204 2xx response: 150
+- Candidates with a schema on every declared non-204 2xx response: 834 (84.84%)
+- Candidates with at least one missing/untyped non-204 2xx response: 149
 - Bodyless 204-only operations: 16
 - HEAD operations: 8 (2 declare success statuses; 6 have no declared 2xx)
 - Operations with no declared 2xx response: 28
@@ -37,20 +37,20 @@ The candidate denominator excludes HEAD/OPTIONS, operations whose only success i
 | Missing response-content state | Status occurrences |
 | ------------------------------ | -----------------: |
 | content-without-schema         |                  0 |
-| no-content                     |                150 |
+| no-content                     |                149 |
 | unresolved-response            |                  0 |
 
 ## Security declarations
 
-- Operation-level declarations: 783
+- Operation-level declarations: 798
 - Inherited declarations: path=0, root=0
-- Missing effective declarations: 246
+- Missing effective declarations: 231
 - Invalid declarations: 0
-- Explicitly public (security: []): 9
+- Explicitly public (security: []): 15
 - Nonempty declarations requiring a named scheme: 153
-- Nonempty declarations including an anonymous empty-object alternative: 621
-- Conditional-auth language detected in operation text: 263
-- Conditional-auth language with an effective security declaration: 263
+- Nonempty declarations including an anonymous empty-object alternative: 630
+- Conditional-auth language detected in operation text: 272
+- Conditional-auth language with an effective security declaration: 272
 - Conditional-auth language with no effective security declaration: 0
 
 A missing security declaration is reported as undocumented, not presumed public. The conditional-auth detector is a review aid based on operation text, not an authorization evaluator. Complete missing-declaration candidates are included in the command's `--json` output.
