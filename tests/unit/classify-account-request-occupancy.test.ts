@@ -13,7 +13,10 @@ const providersDb = await import("../../src/lib/db/providers.ts");
 const readCache = await import("../../src/lib/db/readCache.ts");
 const callLogs = await import("../../src/lib/usage/callLogs.ts");
 const occupancy = await import("../../open-sse/services/accountRequestOccupancy.ts");
+const { acquireConfiguredSharedAccountAdmission } =
+  await import("../../open-sse/services/accountRequestAdmission.ts");
 const classifyRoute = await import("../../src/app/api/v1/classify/route.ts");
+const segmentRoute = await import("../../src/app/api/v1/segment/route.ts");
 
 const originalFetch = globalThis.fetch;
 let connectionId = "";
@@ -40,6 +43,38 @@ function classifyRequest(signal?: AbortSignal) {
     body: JSON.stringify({ input: ["A small test sentence."], labels: ["test", "other"] }),
     ...(signal ? { signal } : {}),
   });
+}
+
+function segmentRequest(signal?: AbortSignal) {
+  return new Request("http://localhost/v1/segment", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content: "A small test sentence." }),
+    ...(signal ? { signal } : {}),
+  });
+}
+
+async function withSharedAdmission(run: () => Promise<void>) {
+  const previousShared = process.env.OMNI_SHARED_ADMISSION;
+  const previousDatabase = process.env.OMNI_COORDINATION_DB;
+  const previousUnhealthy = process.env.OMNI_COORDINATION_UNHEALTHY;
+  globalThis.__omniSharedCoordinator?.close();
+  globalThis.__omniSharedCoordinator = undefined;
+  delete process.env.OMNI_COORDINATION_UNHEALTHY;
+  process.env.OMNI_SHARED_ADMISSION = "true";
+  process.env.OMNI_COORDINATION_DB = path.join(TEST_DATA_DIR, "jina-coordination.sqlite");
+  try {
+    await run();
+  } finally {
+    globalThis.__omniSharedCoordinator?.close();
+    globalThis.__omniSharedCoordinator = undefined;
+    if (previousShared === undefined) delete process.env.OMNI_SHARED_ADMISSION;
+    else process.env.OMNI_SHARED_ADMISSION = previousShared;
+    if (previousDatabase === undefined) delete process.env.OMNI_COORDINATION_DB;
+    else process.env.OMNI_COORDINATION_DB = previousDatabase;
+    if (previousUnhealthy === undefined) delete process.env.OMNI_COORDINATION_UNHEALTHY;
+    else process.env.OMNI_COORDINATION_UNHEALTHY = previousUnhealthy;
+  }
 }
 
 function deferred<T>() {
@@ -108,29 +143,81 @@ test("classify releases its account reservation after an upstream failure", asyn
   assert.equal(occupancy.getAccountRequestInFlightCount(connectionId), 0);
 });
 
-test("classify aborts upstream work and releases occupancy on client cancellation", async () => {
-  const caller = new AbortController();
-  const started = deferred<void>();
-  let upstreamSignal: AbortSignal | undefined;
-  globalThis.fetch = (async (_url: unknown, init: RequestInit = {}) => {
-    upstreamSignal = init.signal as AbortSignal | undefined;
+test("classify honors the shared account cap and releases it on caller cancellation", async () => {
+  await withSharedAdmission(async () => {
+    const caller = new AbortController();
+    const started = deferred<void>();
+    let upstreamSignal: AbortSignal | undefined;
+    globalThis.fetch = (async (_url: unknown, init: RequestInit = {}) => {
+      upstreamSignal = init.signal as AbortSignal | undefined;
+      assert.equal(occupancy.getAccountRequestInFlightCount(connectionId), 1);
+      started.resolve();
+      return new Promise<Response>((_resolve, reject) => {
+        const abort = () => reject(upstreamSignal?.reason ?? new Error("aborted"));
+        upstreamSignal?.addEventListener("abort", abort, { once: true });
+        if (upstreamSignal?.aborted) abort();
+      });
+    }) as typeof fetch;
+
+    const responsePromise = classifyRoute.POST(classifyRequest(caller.signal));
+    await started.promise;
     assert.equal(occupancy.getAccountRequestInFlightCount(connectionId), 1);
-    started.resolve();
-    return new Promise<Response>((_resolve, reject) => {
-      const abort = () => reject(upstreamSignal?.reason ?? new Error("aborted"));
-      upstreamSignal?.addEventListener("abort", abort, { once: true });
-      if (upstreamSignal?.aborted) abort();
+    assert.ok(upstreamSignal);
+
+    let nextAcquired = false;
+    const next = acquireConfiguredSharedAccountAdmission({
+      provider: "jina-ai",
+      credentials: {
+        provider: "jina-ai",
+        connectionId,
+        maxConcurrent: 1,
+        providerSpecificData: { quotaPreflightEnabled: false },
+      },
+    }).then((lease) => {
+      nextAcquired = true;
+      return lease;
     });
-  }) as typeof fetch;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(
+      nextAcquired,
+      false,
+      "the cross-worker account slot stays held while Jina is active"
+    );
 
-  const responsePromise = classifyRoute.POST(classifyRequest(caller.signal));
-  await started.promise;
-  assert.equal(occupancy.getAccountRequestInFlightCount(connectionId), 1);
-  assert.ok(upstreamSignal);
+    caller.abort(new Error("synthetic client disconnect"));
+    const response = await responsePromise;
+    assert.equal(response.status, 499);
+    assert.equal(upstreamSignal.aborted, true);
+    assert.equal(occupancy.getAccountRequestInFlightCount(connectionId), 0);
+    const lease = await next;
+    assert.equal(nextAcquired, true, "caller cancellation releases the shared account slot");
+    lease?.release();
+  });
+});
 
-  caller.abort(new Error("synthetic client disconnect"));
-  const response = await responsePromise;
-  assert.equal(response.status, 499);
-  assert.equal(upstreamSignal.aborted, true);
-  assert.equal(occupancy.getAccountRequestInFlightCount(connectionId), 0);
+test("segment uses the same shared Jina account gate and aborts its provider fetch", async () => {
+  await withSharedAdmission(async () => {
+    const caller = new AbortController();
+    const started = deferred<void>();
+    let upstreamSignal: AbortSignal | undefined;
+    globalThis.fetch = (async (_url: unknown, init: RequestInit = {}) => {
+      upstreamSignal = init.signal as AbortSignal | undefined;
+      assert.equal(occupancy.getAccountRequestInFlightCount(connectionId), 1);
+      started.resolve();
+      return new Promise<Response>((_resolve, reject) => {
+        const abort = () => reject(upstreamSignal?.reason ?? new Error("aborted"));
+        upstreamSignal?.addEventListener("abort", abort, { once: true });
+        if (upstreamSignal?.aborted) abort();
+      });
+    }) as typeof fetch;
+
+    const responsePromise = segmentRoute.POST(segmentRequest(caller.signal));
+    await started.promise;
+    assert.ok(upstreamSignal);
+    caller.abort(new Error("synthetic segment client disconnect"));
+    const response = await responsePromise;
+    assert.equal(response.status, 499);
+    assert.equal(upstreamSignal.aborted, true);
+    assert.equal(occupancy.getAccountRequestInFlightCount(connectionId), 0);
+  });
 });

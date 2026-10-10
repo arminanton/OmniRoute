@@ -10,11 +10,14 @@ import { errorResponse } from "../utils/error.ts";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
 import { saveCallLog } from "@/lib/usageDb";
+import { acquireConfiguredSharedAccountAdmission } from "../services/accountRequestAdmission.ts";
 
 export interface JinaFoundationCredentials {
   apiKey?: string | null;
   accessToken?: string | null;
   connectionId?: string | null;
+  maxConcurrent?: number | null;
+  providerSpecificData?: Record<string, unknown> | null;
 }
 
 export interface JinaFoundationProxyOptions {
@@ -39,8 +42,27 @@ export async function handleJinaFoundationProxy(
     return errorResponse(401, `No credentials for Jina provider: ${provider}`);
   }
 
+  let sharedAdmission: Awaited<ReturnType<typeof acquireConfiguredSharedAccountAdmission>> = null;
   try {
-    options.signal?.throwIfAborted();
+    sharedAdmission = await acquireConfiguredSharedAccountAdmission({
+      provider,
+      credentials: options.credentials,
+      signal: options.signal ?? undefined,
+    });
+  } catch (error) {
+    const admissionError = error as { code?: string; statusCode?: number; message?: string };
+    if (admissionError.code === "ACCOUNT_ADMISSION_UNAVAILABLE") {
+      return errorResponse(
+        admissionError.statusCode || 503,
+        admissionError.message || "Provider account capacity admission is unavailable"
+      );
+    }
+    throw error;
+  }
+  const signal = sharedAdmission?.signal ?? options.signal ?? undefined;
+
+  try {
+    signal?.throwIfAborted();
     const res = await fetch(options.upstreamUrl, {
       method: "POST",
       headers: {
@@ -49,7 +71,7 @@ export async function handleJinaFoundationProxy(
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(options.body),
-      signal: options.signal ?? undefined,
+      signal,
     });
 
     const text = await res.text();
@@ -98,10 +120,12 @@ export async function handleJinaFoundationProxy(
     });
     return new Response(JSON.stringify(parsed), { status: 200, headers });
   } catch (err) {
-    if (options.signal?.aborted) {
+    if (signal?.aborted) {
       return errorResponse(499, "Jina request cancelled");
     }
     const message = err instanceof Error ? err.message : String(err);
     return errorResponse(500, `Jina request failed: ${message}`);
+  } finally {
+    sharedAdmission?.release();
   }
 }
