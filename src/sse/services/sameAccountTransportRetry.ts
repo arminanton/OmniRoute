@@ -1,13 +1,14 @@
 import { classifyUpstreamPolicyRejection } from "@omniroute/open-sse/services/upstreamPolicyRejection.ts";
-import { isProxyFetchExhaustedFailure } from "./networkFailure";
+import { isExhaustedNetworkFailure, isProxyFetchExhaustedFailure } from "./networkFailure";
+import {
+  getGenerationDispatchPhase,
+  isUncertainGenerationAcceptance,
+} from "@omniroute/open-sse/services/generationDispatchEvidence.ts";
 
 /**
- * Same-account retry for retryable pre-output transport failures (#9708).
- *
- * A 503/507 (connection reset, retry-buffer overflow, early EOF before useful
- * output) must not immediately cool the account and rotate. One jittered
- * same-account retry absorbs brief proxy blips and keeps Codex prompt-cache
- * affinity. A second failure then takes a short cooldown and may rotate.
+ * One same-account retry is permitted only with positive local evidence that the
+ * generation failed in the transport queue before request start. Provider5xx,
+ * upstream text, and accepted-stream EOF never establish safe replay.
  */
 
 export const SAME_ACCOUNT_TRANSPORT_RETRY_MAX = 1;
@@ -15,18 +16,6 @@ export const SAME_ACCOUNT_TRANSPORT_RETRY_MIN_DELAY_MS = 2000;
 export const SAME_ACCOUNT_TRANSPORT_RETRY_JITTER_MS = 1000;
 
 const RETRYABLE_TRANSPORT_STATUSES = new Set([502, 503, 504, 507]);
-
-const RETRYABLE_TRANSPORT_TEXT = [
-  /upstream connect error/i,
-  /disconnect\/reset before headers/i,
-  /remote connection failure/i,
-  /connection reset/i,
-  /exceeded request buffer limit/i,
-  /early eof/i,
-  /econnreset/i,
-  /socket hang up/i,
-  /und_err_socket/i,
-];
 
 const NON_RETRYABLE_ERROR_TYPES = new Set([
   "lease_error",
@@ -45,13 +34,19 @@ export function isRetryablePreOutputTransportError(
   status: unknown,
   errorText: string | null | undefined,
   errorCode?: string | null,
-  errorType?: string | null
+  errorType?: string | null,
+  localTransportError?: unknown
 ): boolean {
   if (errorType && NON_RETRYABLE_ERROR_TYPES.has(errorType)) return false;
   if (errorCode && String(errorCode).startsWith("LEASE_")) return false;
   // proxyFetch already exhausted its fresh-dispatcher and native fallback paths.
   // Repeating the whole chat pipeline would only redo parsing and compression.
-  if (isProxyFetchExhaustedFailure(errorCode)) return false;
+  if (
+    isProxyFetchExhaustedFailure(errorCode) ||
+    isExhaustedNetworkFailure(errorCode, errorText, localTransportError) ||
+    isUncertainGenerationAcceptance(localTransportError)
+  )
+    return false;
 
   const text = String(errorText || "");
   if (classifyUpstreamPolicyRejection({ message: text, code: errorCode, type: errorType }))
@@ -63,11 +58,12 @@ export function isRetryablePreOutputTransportError(
     return false;
   }
 
-  const statusRetryable = isRetryableTransportStatus(status);
-  const textRetryable = RETRYABLE_TRANSPORT_TEXT.some((pattern) => pattern.test(text));
-  const codeRetryable = errorCode === "STREAM_EARLY_EOF";
-
-  return statusRetryable || textRetryable || codeRetryable;
+  const dispatch = getGenerationDispatchPhase(localTransportError);
+  return (
+    isRetryableTransportStatus(status) &&
+    dispatch?.phase === "transport_queue" &&
+    dispatch.requestStarted === false
+  );
 }
 
 export function sameAccountTransportRetryDelayMs(random: () => number = Math.random): number {
@@ -86,6 +82,7 @@ export function shouldRetrySameAccountTransport(options: {
   attempt: number;
   hasForcedConnection?: boolean;
   hasEmittedOutput?: boolean;
+  originalError?: unknown;
 }): boolean {
   if (options.hasForcedConnection) return false;
   if (options.hasEmittedOutput) return false;
@@ -94,7 +91,8 @@ export function shouldRetrySameAccountTransport(options: {
     options.status,
     options.errorText,
     options.errorCode,
-    options.errorType
+    options.errorType,
+    options.originalError
   );
 }
 

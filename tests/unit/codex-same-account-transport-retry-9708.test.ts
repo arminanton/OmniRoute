@@ -13,6 +13,13 @@ const {
   SAME_ACCOUNT_TRANSPORT_RETRY_MAX,
 } = await import("../../src/sse/services/sameAccountTransportRetry.ts");
 
+import { noteGenerationDispatchPhase } from "../../open-sse/services/generationDispatchEvidence.ts";
+function preSendFailure() {
+  const failure = new Error("fixture queued transport failure");
+  noteGenerationDispatchPhase(failure, "transport_queue", false);
+  return failure;
+}
+
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-9708-codex-retry-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.API_KEY_SECRET ||= "codex-9708-test-secret";
@@ -62,19 +69,25 @@ test("#9708: 503 connection-reset and 507 buffer errors are retryable pre-output
   assert.equal(
     isRetryablePreOutputTransportError(
       503,
-      "upstream connect error or disconnect/reset before headers reset reason: remote connection failure"
+      "upstream connect error or disconnect/reset before headers reset reason: remote connection failure",
+      undefined,
+      undefined,
+      preSendFailure()
     ),
     true
   );
   assert.equal(
     isRetryablePreOutputTransportError(
       507,
-      "exceeded request buffer limit while retrying upstream"
+      "exceeded request buffer limit while retrying upstream",
+      undefined,
+      undefined,
+      preSendFailure()
     ),
     true
   );
-  assert.equal(isRetryablePreOutputTransportError(504, "gateway timeout"), true);
-  assert.equal(isRetryablePreOutputTransportError(502, "Bad Gateway"), true);
+  assert.equal(isRetryablePreOutputTransportError(504, "gateway timeout"), false);
+  assert.equal(isRetryablePreOutputTransportError(502, "Bad Gateway"), false);
 });
 
 test("#9708: quota, auth, and deterministic 400s never enter the same-account retry path", () => {
@@ -101,6 +114,7 @@ test("#9708: quota, auth, and deterministic 400s never enter the same-account re
     shouldRetrySameAccountTransport({
       status: 503,
       errorText: "remote connection failure",
+      originalError: preSendFailure(),
       attempt: 0,
       hasForcedConnection: true,
     }),
@@ -110,6 +124,7 @@ test("#9708: quota, auth, and deterministic 400s never enter the same-account re
     shouldRetrySameAccountTransport({
       status: 503,
       errorText: "remote connection failure",
+      originalError: preSendFailure(),
       attempt: 0,
       hasEmittedOutput: true,
     }),
@@ -166,6 +181,7 @@ test("#9708: same-account retry is bounded to exactly one attempt", () => {
     shouldRetrySameAccountTransport({
       status: 503,
       errorText: "remote connection failure",
+      originalError: preSendFailure(),
       attempt: 0,
     }),
     true
@@ -174,6 +190,7 @@ test("#9708: same-account retry is bounded to exactly one attempt", () => {
     shouldRetrySameAccountTransport({
       status: 503,
       errorText: "remote connection failure",
+      originalError: preSendFailure(),
       attempt: SAME_ACCOUNT_TRANSPORT_RETRY_MAX,
     }),
     false
@@ -196,8 +213,8 @@ test("exhausted local-network failures do not enter a second chat-layer retry", 
       errorText: "connection reset before headers",
       attempt: 0,
     }),
-    true,
-    "an untagged upstream reset still receives the one retry promised by #9708"
+    false,
+    "upstream reset text alone does not establish safe replay"
   );
 });
 
@@ -245,6 +262,7 @@ test("#9708: simulate first 503 then success on the same account; second failure
         shouldRetrySameAccountTransport({
           status: result.status,
           errorText: result.error,
+          originalError: preSendFailure(),
           attempt,
         })
       ) {

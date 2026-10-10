@@ -4746,6 +4746,12 @@ async function handleChatCoreOwned({
       // distinguishable from ordinary provider 5xx responses.
       const isProxyUnreachableFailure =
         !isRequestAborted && isVerifiedProxyFetchExhaustedError(error);
+      const dispatchEvidence = getGenerationDispatchPhase(error);
+      const preserveOriginalError =
+        isProxyUnreachableFailure ||
+        (!isRequestAborted &&
+          dispatchEvidence?.phase === "transport_queue" &&
+          dispatchEvidence.requestStarted === false);
       // An arbitrary executor throw can carry provider-derived codes; only a
       // final proxyFetch-branded error may use a local-network identifier.
       const errorCode = isProxyUnreachableFailure
@@ -4828,7 +4834,7 @@ async function handleChatCoreOwned({
           ...result,
           errorType: upstreamErrorType,
           errorCode: upstreamErrorCode,
-          ...(isProxyUnreachableFailure ? { originalError: error } : {}),
+          ...(preserveOriginalError ? { originalError: error } : {}),
         };
       }
       const result = createErrorResult(
@@ -4839,7 +4845,7 @@ async function handleChatCoreOwned({
         upstreamErrorType
       );
       localLimiterErrors.markTrustedLocalRateLimitResponse(result.response, error);
-      return isProxyUnreachableFailure ? { ...result, originalError: error } : result;
+      return preserveOriginalError ? { ...result, originalError: error } : result;
     }
     let upstreamErrorParsed = false;
     let parsedStatusCode = providerResponse.status;

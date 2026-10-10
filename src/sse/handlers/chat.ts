@@ -2508,6 +2508,7 @@ async function handleSingleModelChatImplementation(
           errorText: errorStr,
           errorCode: result.errorCode,
           errorType: result.errorType,
+          originalError: result.originalError,
           attempt: transportAttempts,
           hasForcedConnection,
         })
