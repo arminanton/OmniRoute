@@ -110,6 +110,9 @@ export class KieExecutor extends BaseExecutor {
       : 0;
     const deadline = Date.now() + boundedTimeoutMs;
     const timeoutError = Object.assign(new Error("Kie task timed out"), { status: 504 });
+    const boundedPollIntervalMs = Number.isFinite(pollIntervalMs)
+      ? Math.min(MAX_TIMER_DELAY_MS, Math.max(0, pollIntervalMs))
+      : 0;
     const requestController = new AbortController();
     const abortFromCaller = () =>
       requestController.abort(signal?.reason ?? new DOMException("Aborted", "AbortError"));
@@ -144,7 +147,7 @@ export class KieExecutor extends BaseExecutor {
           return { data: recordData, state };
         }
 
-        await sleepWithSignal(pollIntervalMs, requestController.signal);
+        await sleepWithSignal(boundedPollIntervalMs, requestController.signal);
       }
 
       throw timeoutError;

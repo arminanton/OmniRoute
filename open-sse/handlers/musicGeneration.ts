@@ -412,7 +412,10 @@ async function handleKieMusicGeneration({
   pollSignal?: AbortSignal | null;
 }) {
   const startTime = Date.now();
-  const timeoutMs = Number(body.timeout_ms) > 0 ? Number(body.timeout_ms) : 300000;
+  const timeoutMs = Math.min(
+    2_147_483_647,
+    Number(body.timeout_ms) > 0 ? Number(body.timeout_ms) : 300_000
+  );
   const pollIntervalMs = Number(body.poll_interval_ms) > 0 ? Number(body.poll_interval_ms) : 2500;
   const token = credentials?.apiKey || credentials?.accessToken;
   const baseUrl = providerConfig.baseUrl.replace(/\/$/, "");
@@ -459,16 +462,31 @@ async function handleKieMusicGeneration({
     );
   }
 
+  const deadlineAt = Date.now() + timeoutMs;
+  const deadlineController = new AbortController();
+  const deadlineError = Object.assign(new Error("KIE music generation timed out"), {
+    name: "TimeoutError",
+    status: 504,
+  });
+  const deadlineTimer = setTimeout(() => deadlineController.abort(deadlineError), timeoutMs);
+  let taskId: string | null = null;
+  let taskAccepted = false;
+
   try {
+    // Check caller/lease cancellation before submit, then use a server-owned
+    // deadline. The remote task cannot be cancelled once this POST is accepted.
+    signal?.throwIfAborted();
     const endpoint = new URL(url).pathname;
     const createData = await kieExecutor.createTask({
       baseUrl,
       token,
       payload,
       endpoint,
-      signal,
+      signal: deadlineController.signal,
     });
-    const taskId = getKieTaskId(createData);
+    taskId = getKieTaskId(createData);
+    taskAccepted = Boolean(taskId);
+    if (deadlineController.signal.aborted) throw deadlineController.signal.reason;
     if (!taskId) {
       const errorMessage =
         createData?.msg ||
@@ -478,7 +496,7 @@ async function handleKieMusicGeneration({
       if (log) {
         log.error("MUSIC", `KIE createTask failed: ${JSON.stringify(createData)}`);
       }
-      return { success: false, status: 502, error: errorMessage };
+      return { success: false, status: 502, terminal: true, error: errorMessage };
     }
 
     const statusUrl = isMarket
@@ -487,16 +505,16 @@ async function handleKieMusicGeneration({
         ? providerConfig.statusUrl
         : `${baseUrl}/api/v1/generate/record-info`;
 
+    const pollTaskSignal = pollSignal
+      ? AbortSignal.any([deadlineController.signal, pollSignal])
+      : deadlineController.signal;
     const { data: recordData, state } = await kieExecutor.pollTask({
       statusUrl,
       taskId: String(taskId),
       token,
-      timeoutMs,
+      timeoutMs: Math.max(0, deadlineAt - Date.now()),
       pollIntervalMs,
-      // Once a task id is known, the provider offers no cancellation endpoint.
-      // The route passes null here so polling continues while it retains local
-      // and shared account reservations through terminal completion/timeout.
-      signal: pollSignal === undefined ? signal : (pollSignal ?? undefined),
+      signal: pollTaskSignal,
     });
 
     if (state === "success") {
@@ -536,11 +554,21 @@ async function handleKieMusicGeneration({
     const errorMessage = data.errorMessage || data.failMsg || record.msg || "KIE music task failed";
     return { success: false, status: 502, error: String(errorMessage) };
   } catch (err: unknown) {
+    const errorStatus =
+      typeof err === "object" && err !== null && "status" in err
+        ? Number((err as { status?: unknown }).status) || 502
+        : 502;
+    const timedOut =
+      deadlineController.signal.aborted || errorStatus === 504 || Date.now() >= deadlineAt;
+    const explicitRejection = [400, 401, 403, 404, 429].includes(errorStatus);
     return {
       success: false,
-      status: isJsonObject(err) && Number.isFinite(Number(err.status)) ? Number(err.status) : 502,
+      status: timedOut ? 504 : errorStatus,
+      ...(taskAccepted || timedOut || !explicitRejection ? { terminal: true } : {}),
       error: sanitizeErrorMessage(err) || "Music provider error",
     };
+  } finally {
+    clearTimeout(deadlineTimer);
   }
 }
 

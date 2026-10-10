@@ -162,6 +162,66 @@ test("handleMusicGeneration polls KIE music tasks and returns audio URLs", async
   }
 });
 
+test("KIE music create timeout returns terminal 504 for ambiguous acceptance", async () => {
+  const originalFetch = globalThis.fetch;
+  let createSignal: AbortSignal | null = null;
+  globalThis.fetch = async (_url, options = {}) =>
+    new Promise<Response>((_resolve, reject) => {
+      createSignal = options.signal as AbortSignal;
+      assert.ok(createSignal, "KIE music submit receives a server-owned deadline");
+      createSignal.addEventListener("abort", () => reject(createSignal!.reason), { once: true });
+    });
+
+  try {
+    const result = await handleMusicGeneration({
+      body: { model: "kie/V4", prompt: "test music", timeout_ms: 20 },
+      credentials: { apiKey: "kie-key" },
+      log: null,
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.status, 504);
+    assert.equal(result.terminal, true);
+    assert.equal(createSignal?.aborted, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("KIE music poll timeout is terminal after the task was accepted", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  let pollSignal: AbortSignal | null = null;
+  globalThis.fetch = async (_url, options = {}) => {
+    calls++;
+    if (calls === 1) {
+      return Response.json({ code: 200, data: { taskId: "accepted-music-task" } });
+    }
+    pollSignal = options.signal as AbortSignal;
+    return new Promise<Response>((_resolve, reject) => {
+      assert.ok(pollSignal, "KIE polling receives the server-owned deadline");
+      pollSignal.addEventListener("abort", () => reject(pollSignal!.reason), { once: true });
+    });
+  };
+
+  try {
+    const result = await handleMusicGeneration({
+      body: { model: "kie/V4", prompt: "test music", timeout_ms: 30 },
+      credentials: { apiKey: "kie-key" },
+      log: null,
+      pollSignal: null,
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.status, 504);
+    assert.equal(result.terminal, true);
+    assert.equal(calls, 2, "accepted KIE music tasks are never recreated on a poll timeout");
+    assert.equal(pollSignal?.aborted, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("handleMusicGeneration rejects unsupported provider formats", async () => {
   const originalProvider = MUSIC_PROVIDERS.fakeprovider;
 

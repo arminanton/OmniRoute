@@ -839,7 +839,7 @@ async function handleKieVideoGeneration({
   } | null;
 }) {
   const startTime = Date.now();
-  const timeoutMs = Number(body.timeout_ms) > 0 ? Number(body.timeout_ms) : 300000;
+  const timeoutMs = Math.min(2_147_483_647, resolvePositiveInteger(body.timeout_ms, 300_000));
   const pollIntervalMs = Number(body.poll_interval_ms) > 0 ? Number(body.poll_interval_ms) : 2500;
   const token = credentials?.apiKey || credentials?.accessToken;
   const baseUrl = providerConfig.baseUrl.replace(/\/$/, "");
@@ -864,9 +864,26 @@ async function handleKieVideoGeneration({
     log.info("VIDEO", `${provider}/${model} (kie-video) | prompt: "${promptPreview}..."`);
   }
 
+  const deadlineAt = Date.now() + timeoutMs;
+  const deadlineController = new AbortController();
+  const deadlineError = Object.assign(new Error("KIE video generation timed out"), {
+    name: "TimeoutError",
+    status: 504,
+  });
+  const deadlineTimer = setTimeout(() => deadlineController.abort(deadlineError), timeoutMs);
+  let taskId: string | null = null;
+  let taskAccepted = false;
+
   try {
-    const createData = await kieExecutor.createTask({ baseUrl, token, payload });
-    const taskId = getKieTaskId(createData);
+    const createData = await kieExecutor.createTask({
+      baseUrl,
+      token,
+      payload,
+      signal: deadlineController.signal,
+    });
+    taskId = getKieTaskId(createData);
+    taskAccepted = Boolean(taskId);
+    if (deadlineController.signal.aborted) throw deadlineController.signal.reason;
     if (!taskId) {
       const errorMessage =
         createData?.msg ||
@@ -876,7 +893,7 @@ async function handleKieVideoGeneration({
       if (log) {
         log.error("VIDEO", `KIE createTask failed: ${JSON.stringify(createData)}`);
       }
-      return { success: false, status: 502, error: errorMessage };
+      return { success: false, status: 502, terminal: true, error: errorMessage };
     }
 
     const statusUrl = providerConfig.statusUrl || `${baseUrl}/api/v1/jobs/recordInfo`;
@@ -885,8 +902,9 @@ async function handleKieVideoGeneration({
       statusUrl,
       taskId: String(taskId),
       token,
-      timeoutMs,
+      timeoutMs: Math.max(0, deadlineAt - Date.now()),
       pollIntervalMs,
+      signal: deadlineController.signal,
     });
 
     if (state === "success") {
@@ -914,11 +932,21 @@ async function handleKieVideoGeneration({
     const errorMessage = data.failMsg || data.errorMessage || record.msg || "KIE video task failed";
     return { success: false, status: 502, error: String(errorMessage) };
   } catch (err: unknown) {
+    const errorStatus =
+      typeof err === "object" && err !== null && "status" in err
+        ? Number((err as { status?: unknown }).status) || 502
+        : 502;
+    const timedOut =
+      deadlineController.signal.aborted || errorStatus === 504 || Date.now() >= deadlineAt;
+    const explicitRejection = [400, 401, 403, 404, 429].includes(errorStatus);
     return {
       success: false,
-      status: isJsonObject(err) && Number.isFinite(Number(err.status)) ? Number(err.status) : 502,
+      status: timedOut ? 504 : errorStatus,
+      ...(taskAccepted || timedOut || !explicitRejection ? { terminal: true } : {}),
       error: sanitizeErrorMessage(err) || "Video provider error",
     };
+  } finally {
+    clearTimeout(deadlineTimer);
   }
 }
 
