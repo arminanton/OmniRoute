@@ -2042,6 +2042,46 @@ rerank passed; core and open-sse typechecks passed. Tests used fake providers an
 cross-worker state or establish real-provider quota behavior or 70–100 active upstream request
 capacity.
 
+### Antigravity private-capture reference A/B (2026-10-10)
+
+Two serial standalone runs used the same already-built Node executable, 100 conversations × two
+turns, 700,000 bytes of user context per turn, 100 direct dispatcher connections, a two-core app
+quota, and 5/6 GiB app memory high/max. Both used the same 10-minute synthetic account-affinity TTL
+and local mock provider. The test completed 200/200 requests in each cell; the private cell also
+retained 200/200 complete traces and 200 ready artifacts, with no call-log refusal or omission.
+
+| Capture mode | Client elapsed | Response total p50 / p95 / p99 | App cgroup memory peak | App CPU | App process block writes |
+| ------------ | -------------: | ---------------------------: | --------------------: | ------: | -----------------------: |
+| None         | 75.96 s        | 28.04 / 54.16 / 56.65 s       | 2.93 GiB              | 100.7 s | 56.6 MiB                 |
+| Private      | 88.13 s        | 30.96 / 53.09 / 59.45 s       | 4.59 GiB              | 156.6 s | 1.07 GiB                 |
+
+In this single-trial A/B, private capture increased end-to-end client time by about 16%, app peak
+memory by about 57%, app CPU by about 56%, and app-attributed block writes by about 19×. The host
+remained below memory pressure and the app recorded no OOM or `memory.high` event; host I/O PSI
+briefly reached about 9% `some` / 6.9% `full` while capture data was being written. These figures are
+synthetic and show material capture overhead; they do not establish real-provider behavior or a
+production 100-agent capacity limit. One run per cell is not enough to claim a stable p95 comparison.
+
+The existing standalone executable's `server.js` timestamp was 2026-10-10 01:13 UTC and it did not
+embed a source SHA, so this is a reference measurement from an older build, not verification of the
+current blue source. It also predates the writer high-water fields; a final health snapshot therefore
+showed drained zeroes rather than process-lifetime peaks. The source now exposes bounded queue and
+reservation high-water marks, and the benchmark reads one management snapshot after capture drains
+instead of polling during load. A current-source build and a fresh matched pair remain necessary to
+validate those changes.
+
+### Long Antigravity turns and account affinity
+
+An earlier private-capture run with a 60-second session-affinity TTL produced three synthetic
+`native session changed during tool turn` upstream errors under 100-session load, although the client
+recovered all turns. Request latency exceeded that short TTL for outlier turns, allowing the next
+tool turn to select another account and derive a different native Antigravity session ID. Chat now
+refreshes only the still-current account pin when a successful response finishes; compare-and-set
+semantics prevent an older stream from overwriting a newer account choice. Unit coverage passed, and
+the source-level Antigravity integration test passed with a 50 ms affinity TTL and 200 ms upstream
+delay. This refresh is disabled when session affinity is disabled (TTL zero); cross-process pin
+ownership remains unchanged.
+
 ## Remaining acceptance checks
 
 - Capture the management-only pressure sample on `GET /api/monitoring/health` with a credential
