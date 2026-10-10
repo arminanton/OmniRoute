@@ -45,6 +45,21 @@ export interface ProviderQuotaSnapshot {
   windowReset: number;
 }
 
+/**
+ * Internal read state for policy projections that need to distinguish absent
+ * quota configuration from a failed store read. Do not serialize this result
+ * directly to an HTTP response; the error case intentionally exposes only a
+ * stable code, not database or exception details.
+ */
+export type ProviderQuotaReadResult =
+  | {
+      status: "unconfigured";
+      reason: "invalid_lookup" | "missing_row" | "no_token_limit";
+    }
+  | { status: "expired"; snapshot: ProviderQuotaSnapshot }
+  | { status: "known"; snapshot: ProviderQuotaSnapshot }
+  | { status: "read-error"; errorCode: "provider_quota_read_failed" };
+
 interface RowLike {
   connection_id?: string;
   model?: string;
@@ -67,6 +82,79 @@ function normalizeRow(row: RowLike): ProviderQuotaRow {
   };
 }
 
+function createSnapshot(normalized: ProviderQuotaRow, now: number): ProviderQuotaSnapshot {
+  if (normalized.windowReset > 0 && now > normalized.windowReset) {
+    return {
+      known: false,
+      tokensUsed: 0,
+      tokenLimit: 0,
+      tokensRemaining: 0,
+      remainingRatio: 1,
+      windowReset: normalized.windowReset,
+    };
+  }
+
+  const tokenLimit = normalized.tokenLimit > 0 ? normalized.tokenLimit : 0;
+  const tokensUsed = Math.max(0, normalized.tokensUsed);
+  const tokensRemaining = tokenLimit > 0 ? Math.max(0, tokenLimit - tokensUsed) : 0;
+  const remainingRatio =
+    tokenLimit > 0 ? Math.min(1, Math.max(0, tokensRemaining / tokenLimit)) : 1;
+
+  return {
+    known: true,
+    tokensUsed,
+    tokenLimit,
+    tokensRemaining,
+    remainingRatio,
+    windowReset: normalized.windowReset,
+  };
+}
+
+function boundedErrorDiagnostic(err: unknown): { name: string; message: string } {
+  const candidate = err as { name?: unknown; message?: unknown } | null;
+  const name = String(candidate?.name ?? "Error")
+    .replace(/[\r\n\t]/g, " ")
+    .slice(0, 64);
+  const message = String(candidate?.message ?? err ?? "Unknown error")
+    .replace(/[\r\n\t]/g, " ")
+    .slice(0, 160);
+  return { name, message };
+}
+
+/**
+ * Read a quota state while preserving whether the absence is configuration
+ * state, an expired window, or an actual read failure. This is an additive
+ * internal API; existing request-path callers should continue using
+ * `getProviderQuota()` until a policy change is separately reviewed.
+ */
+export function getProviderQuotaReadResult(
+  connectionId: string,
+  model: string
+): ProviderQuotaReadResult {
+  if (!connectionId || !model) {
+    return { status: "unconfigured", reason: "invalid_lookup" };
+  }
+
+  try {
+    const db = getDbInstance();
+    const row = db
+      .prepare("SELECT * FROM provider_quota_state WHERE connection_id = ? AND model = ?")
+      .get(connectionId, model) as RowLike | undefined;
+    if (!row) return { status: "unconfigured", reason: "missing_row" };
+
+    const normalized = normalizeRow(row);
+    const snapshot = createSnapshot(normalized, Date.now());
+    if (!snapshot.known) return { status: "expired", snapshot };
+    if (snapshot.tokenLimit <= 0) {
+      return { status: "unconfigured", reason: "no_token_limit" };
+    }
+    return { status: "known", snapshot };
+  } catch (err) {
+    log.warn({ diagnostic: boundedErrorDiagnostic(err) }, "getProviderQuotaReadResult failed");
+    return { status: "read-error", errorCode: "provider_quota_read_failed" };
+  }
+}
+
 /**
  * Read the current quota snapshot for (connectionId, model).
  * When the record is stale (its window expired) the caller sees
@@ -85,32 +173,7 @@ export function getProviderQuota(
     if (!row) return null;
 
     const normalized = normalizeRow(row);
-    const now = Date.now();
-    if (normalized.windowReset > 0 && now > normalized.windowReset) {
-      return {
-        known: false,
-        tokensUsed: 0,
-        tokenLimit: 0,
-        tokensRemaining: 0,
-        remainingRatio: 1,
-        windowReset: normalized.windowReset,
-      };
-    }
-
-    const tokenLimit = normalized.tokenLimit > 0 ? normalized.tokenLimit : 0;
-    const tokensUsed = Math.max(0, normalized.tokensUsed);
-    const tokensRemaining = tokenLimit > 0 ? Math.max(0, tokenLimit - tokensUsed) : 0;
-    const remainingRatio =
-      tokenLimit > 0 ? Math.min(1, Math.max(0, tokensRemaining / tokenLimit)) : 1;
-
-    return {
-      known: true,
-      tokensUsed,
-      tokenLimit,
-      tokensRemaining,
-      remainingRatio,
-      windowReset: normalized.windowReset,
-    };
+    return createSnapshot(normalized, Date.now());
   } catch (err) {
     log.warn(
       { err: (err as Error)?.message, connectionId, model },
