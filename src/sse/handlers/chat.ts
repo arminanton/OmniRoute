@@ -201,7 +201,7 @@ import {
   disableCooldownAwareRetry,
   getCooldownAwareRetryDecision,
   resolveCooldownAwareRetrySettings,
-  waitForCooldownAwareRetry,
+  waitForCooldownAwareRetryWithinLogicalDeadline,
 } from "../services/cooldownAwareRetry";
 import {
   shouldRetrySameAccountTransport,
@@ -1793,8 +1793,11 @@ async function handleSingleModelChatImplementation(
               `${provider}/${model} all connections cooling down (${retryDecision.retryAfterHuman || `retry in ${waitSec}s`}) — waiting ${waitSec}s before retry ${requestRetryAttempt + 1}/${retrySettings.maxRetries}`
             );
 
-            const completed = await waitForCooldownAwareRetry(retryDecision.waitMs, requestSignal);
-            if (!completed) {
+            const completed = await waitForCooldownAwareRetryWithinLogicalDeadline(
+              retryDecision.waitMs,
+              requestSignal
+            );
+            if (completed === false) {
               log.info(
                 "COOLDOWN_RETRY",
                 `${provider}/${model} retry wait aborted by client disconnect`
@@ -1802,13 +1805,18 @@ async function handleSingleModelChatImplementation(
               return errorResponse(499, "Request aborted");
             }
 
-            requestRetryAttempt += 1;
-            requestRetryBudgetLeftMs = Math.max(0, requestRetryBudgetLeftMs - retryDecision.waitMs);
-            log.info(
-              "COOLDOWN_RETRY",
-              `${provider}/${model} cooldown elapsed - restarting after retry ${requestRetryAttempt}/${retrySettings.maxRetries}`
-            );
-            continue requestAttemptLoop;
+            if (completed === true) {
+              requestRetryAttempt += 1;
+              requestRetryBudgetLeftMs = Math.max(
+                0,
+                requestRetryBudgetLeftMs - retryDecision.waitMs
+              );
+              log.info(
+                "COOLDOWN_RETRY",
+                `${provider}/${model} cooldown elapsed - restarting after retry ${requestRetryAttempt}/${retrySettings.maxRetries}`
+              );
+              continue requestAttemptLoop;
+            }
           }
         }
 
@@ -2504,26 +2512,31 @@ async function handleSingleModelChatImplementation(
           hasForcedConnection,
         })
       ) {
-        sameAccountTransportRetries.set(credentials.connectionId, transportAttempts + 1);
         const waitMs = sameAccountTransportRetryDelayMs();
         log.warn(
           "RETRY",
           `${provider}/${model} retryable pre-output ${result.status} — retrying same account once after ${waitMs}ms`
         );
-        const completed = await waitForCooldownAwareRetry(waitMs, requestSignal);
-        if (!completed) {
+        const completed = await waitForCooldownAwareRetryWithinLogicalDeadline(
+          waitMs,
+          requestSignal
+        );
+        if (completed === false) {
           releaseSelectedAccount();
           return errorResponse(499, "Request aborted");
         }
-        preselectedCredentials = {
-          ...credentials,
-          releaseOAuthSession:
-            credentials.authType === "oauth"
-              ? reserveOAuthSession(credentials.connectionId, occupancySessionKey)
-              : undefined,
-          releaseAccountRequest: reserveAccountRequest(credentials.connectionId),
-        };
-        continue;
+        if (completed === true) {
+          sameAccountTransportRetries.set(credentials.connectionId, transportAttempts + 1);
+          preselectedCredentials = {
+            ...credentials,
+            releaseOAuthSession:
+              credentials.authType === "oauth"
+                ? reserveOAuthSession(credentials.connectionId, occupancySessionKey)
+                : undefined,
+            releaseAccountRequest: reserveAccountRequest(credentials.connectionId),
+          };
+          continue;
+        }
       }
 
       // 8. Fallback to next account

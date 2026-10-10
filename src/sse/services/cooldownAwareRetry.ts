@@ -1,3 +1,4 @@
+import { getLogicalRetryBudget } from "@omniroute/open-sse/services/logicalRetryBudget.ts";
 import { formatRetryAfter } from "@omniroute/open-sse/services/accountFallback.ts";
 import { resolveResilienceSettings } from "@/lib/resilience/settings";
 import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
@@ -208,4 +209,24 @@ export async function waitForCooldownAwareRetry(
 
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/**
+ * Outer retry owner: null skips an unfittable/expired retry, false retains caller
+ * abort semantics, and true permits the existing retry flow. This does not debit
+ * the independent cumulative cooldown budget or throw a new public error.
+ */
+export async function waitForCooldownAwareRetryWithinLogicalDeadline(
+  waitMs: number,
+  signal?: AbortSignal | null
+): Promise<boolean | null> {
+  if (signal?.aborted) return false;
+  const budget = getLogicalRetryBudget();
+  const remaining = budget?.remainingTimeMs();
+  if (remaining !== undefined && (remaining <= 0 || waitMs >= remaining)) return null;
+  const completed = await waitForCooldownAwareRetry(waitMs, signal);
+  if (!completed || signal?.aborted) return false;
+  // A delayed event-loop callback must not authorize a late retry.
+  if (budget && budget.remainingTimeMs() <= 0) return null;
+  return true;
 }
