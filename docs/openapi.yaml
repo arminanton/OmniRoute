@@ -9482,13 +9482,7 @@ paths:
           x-sensitive: true
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  ok:
-                    type: boolean
-                  installedVersion:
-                    type: string
+              schema: { $ref: "#/components/schemas/ServiceInstallResponse" }
         "400":
           description: Invalid request body
         "500":
@@ -9633,7 +9627,8 @@ paths:
       description: >-
         Compares installed/latest releases; if an update is needed, stops a running process, installs
         the latest GitHub release, and attempts to restart it. A restart failure is logged while the
-        update result can still report success. **LOCAL_ONLY** — only loopback and trusted private-LAN
+        update result can still report success. This route accepts no version request body and
+        always checks/installs the latest release. **LOCAL_ONLY** — only loopback and trusted private-LAN
         peers pass the locality gate; this spawn-capable service prefix has no remote manage-scope
         bypass. On admitted peers, `requireLogin=false` permits anonymous local/LAN access; otherwise
         management authentication is required. `oma_` Access Tokens need `admin` on
@@ -9648,29 +9643,13 @@ paths:
         - InternalServiceTokenAuth: []
         - {}
       x-sensitive: true
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                version:
-                  type: string
-                  default: latest
       responses:
         "200":
-          description: Update succeeded
+          description: No update was needed, or latest was installed successfully.
           x-sensitive: true
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  ok:
-                    type: boolean
-                  installedVersion:
-                    type: string
+              schema: { $ref: "#/components/schemas/CliproxyUpdateResponse" }
         "500":
           description: Update failed
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
@@ -10446,15 +10425,7 @@ paths:
           x-sensitive: true
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  ok:
-                    type: boolean
-                  installedVersion:
-                    type: string
-                  path:
-                    type: string
+              schema: { $ref: "#/components/schemas/ServiceInstallResponse" }
         "400":
           description: Invalid request body
         "500":
@@ -10639,7 +10610,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ServiceStatusExtended"
+                $ref: "#/components/schemas/DarioServiceStatusResponse"
         "500":
           description: Status read failed
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
@@ -52415,6 +52386,69 @@ components:
               description: >-
                 Whether models from this service are exposed as a routing provider.
                 9Router only.
+
+    ServiceInstallResponse:
+      type: object
+      x-sensitive: true
+      description: Shared success response returned by the embedded-service install wrapper, with the installer result fields.
+      required: [ok, installedVersion, installPath, durationMs]
+      properties:
+        ok: { type: boolean, const: true }
+        installedVersion: { type: string }
+        installPath: { type: string, x-sensitive: true }
+        durationMs: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    CliproxyUpdateCurrentResponse:
+      type: object
+      x-sensitive: true
+      required: [updated, installedVersion, latestVersion]
+      properties:
+        updated: { type: boolean, const: false }
+        installedVersion: { type: string }
+        latestVersion: { type: string }
+      additionalProperties: false
+
+    CliproxyUpdateInstalledResponse:
+      type: object
+      x-sensitive: true
+      required: [updated, oldVersion, newVersion]
+      properties:
+        updated: { type: boolean, const: true }
+        oldVersion: { type: [string, "null"] }
+        newVersion: { type: string }
+      additionalProperties: false
+
+    CliproxyUpdateResponse:
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/CliproxyUpdateCurrentResponse" }
+        - { $ref: "#/components/schemas/CliproxyUpdateInstalledResponse" }
+
+    DarioServiceStatusResponse:
+      type: object
+      x-sensitive: true
+      description: Dario live/DB status fields; unlike 9Router's extended response, this contains no API-key preview or plaintext-key fields.
+      required: [tool, state, pid, port, health, startedAt, lastError, installedVersion, latestVersion, updateAvailable, autoStart, adopted, autoRestartAdopted]
+      properties:
+        tool: { type: string, const: dario }
+        state:
+          type: string
+          description: Supervisor state, persisted service state, or `unknown` when no stored state exists.
+        pid: { type: [integer, "null"], minimum: 1, x-sensitive: true }
+        port: { type: integer, minimum: 1 }
+        health:
+          type: string
+          description: Supervisor health state or the persisted health-status value.
+        startedAt: { type: [string, "null"], format: date-time }
+        lastError: { type: [string, "null"], x-sensitive: true }
+        installedVersion: { type: [string, "null"] }
+        latestVersion: { type: [string, "null"] }
+        updateAvailable: { type: boolean }
+        autoStart: { type: boolean }
+        adopted: { type: boolean }
+        autoRestartAdopted: { type: boolean }
+      additionalProperties: false
 
     ServiceModelsResponse:
       type: object
