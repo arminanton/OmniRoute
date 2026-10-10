@@ -20,6 +20,7 @@ test("POST /api/dahl/tokens proxies success response with token", async () => {
   const data = await res.json();
 
   assert.equal(res.status, 200);
+  assert.equal(res.headers.get("cache-control"), "no-store");
   assert.equal(data.token, "dahl_abc123");
   assert.equal(data.available_tokens, 100000000);
 });

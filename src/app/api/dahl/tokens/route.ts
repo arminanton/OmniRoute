@@ -37,7 +37,12 @@ export async function POST() {
     }
 
     const data = await resp.json();
-    return NextResponse.json(data, { status: resp.status });
+    return NextResponse.json(data, {
+      status: resp.status,
+      // The response contains a bearer-style token. It must never be persisted
+      // by browsers, proxies, or shared caches.
+      headers: { "Cache-Control": "no-store" },
+    });
   } catch (err) {
     if (err instanceof SafeOutboundFetchError) {
       const status = getSafeOutboundFetchErrorStatus(err) ?? 502;
