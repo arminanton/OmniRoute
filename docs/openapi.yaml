@@ -22857,27 +22857,186 @@ paths:
       tags:
         - Providers
       summary: "POST providers › zed › discover"
+      description: >-
+        Reads Zed's local keychain and returns provider/service/account metadata plus a 16-character
+        SHA-256 fingerprint for each importable credential. Raw tokens are never returned. Protected
+        profiles accept a dashboard session, a `manage`/`admin` API key via Bearer, Anthropic
+        `x-api-key` (with the `anthropic-version` header or a User-Agent matching `claude-code`,
+        `claude-cli`, or `anthropic`), Google `x-goog-api-key`, a loopback CLI token, or a trusted
+        loopback internal-service token. An `oma_live_` Access Token requires `admin` scope for this
+        `/api/providers` POST. Unlocked standalone installs with `requireLogin=false` may permit
+        anonymous access; a fresh install may allow loopback bootstrap requests. URL credentials are
+        not accepted.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Sensitive Zed account summary with fingerprints; raw credential values are omitted.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ZedDiscoverResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management authentication failed or access to the host keychain was denied.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ZedCredentialOperationErrorResponse"
+        "404":
+          description: Zed IDE is not installed on this system.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ZedCredentialOperationErrorResponse" }
+        "422":
+          description: Docker cannot access the host keychain.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ZedCredentialOperationErrorResponse" }
+        "500":
+          description: Credential discovery failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ZedCredentialOperationErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/zed/import:
     post:
       operationId: postApiProvidersZedImport
       tags:
         - Providers
       summary: "POST providers › zed › import"
+      description: >-
+        Imports only keychain credentials matching the user-confirmed service/account/fingerprint
+        tuples. The default mode requires `confirmedAccounts`; an empty or omitted body is accepted
+        only when `OMNIROUTE_ZED_IMPORT_LEGACY_ONE_STEP=true`. The response contains account
+        summaries and `hasToken` booleans, never raw credential values. Protected profiles accept a
+        dashboard session, a `manage`/`admin` API key via Bearer, Anthropic `x-api-key` (with the
+        `anthropic-version` header or a User-Agent matching `claude-code`, `claude-cli`, or
+        `anthropic`), Google `x-goog-api-key`, a loopback CLI token, or a trusted loopback
+        internal-service token. An `oma_live_` Access Token requires `admin` scope for this
+        `/api/providers` POST. Unlocked standalone installs with `requireLogin=false` may permit
+        anonymous access; a fresh install may allow loopback bootstrap requests. URL credentials are
+        not accepted.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: false
+        x-sensitive: true
+        description: >-
+          User-confirmed keychain entries. Fingerprints are derived from credentials; the raw
+          credentials are not accepted in this request.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ZedImportRequest" }
       responses:
         "200":
-          description: OK
+          description: Sensitive summary of selected import attempts; raw credential values are omitted.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ZedImportResponse" }
+        "400":
+          description: The confirmation list is missing or malformed in the default two-step mode.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ZedCredentialOperationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management authentication failed or access to the host keychain was denied.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ZedCredentialOperationErrorResponse"
+        "404":
+          description: Zed is not installed or the host keychain is unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ZedCredentialOperationErrorResponse" }
+        "422":
+          description: Docker cannot access the host keychain.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ZedCredentialOperationErrorResponse" }
+        "500":
+          description: Credential import failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ZedCredentialOperationErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/zed/manual-import:
     post:
       operationId: postApiProvidersZedManualImport
       tags:
         - Providers
       summary: "POST providers › zed › manual import"
+      description: >-
+        Stores a manually provided Zed API token as a provider connection. The request token is
+        sensitive; the response returns only the new connection id and provider. Protected profiles
+        accept a dashboard session, a `manage`/`admin` API key via Bearer, Anthropic `x-api-key`
+        (with the `anthropic-version` header or a User-Agent matching `claude-code`, `claude-cli`, or
+        `anthropic`), Google `x-goog-api-key`, a loopback CLI token, or a trusted loopback
+        internal-service token. An `oma_live_` Access Token requires `admin` scope for this
+        `/api/providers` POST. Unlocked standalone installs with `requireLogin=false` may permit
+        anonymous access; a fresh install may allow loopback bootstrap requests. URL credentials are
+        not accepted.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        description: Raw Zed provider token; never place this value in a response or example.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ZedManualImportRequest" }
       responses:
         "200":
-          description: OK
+          description: New provider connection reference; the submitted token is not returned.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ZedManualImportResponse" }
+        "400":
+          description: The JSON body is invalid or fails validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: The provider connection could not be saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/proxy-fallback/test:
     post:
       operationId: postApiProxyFallbackTest
@@ -33289,8 +33448,7 @@ paths:
           headers:
             Cache-Control: { schema: { type: string, const: "private, no-store" } }
             X-Content-Type-Options: { schema: { type: string, const: nosniff } }
-            X-Diagnostic-Capture-State:
-              { schema: { type: string, enum: [complete, incomplete] } }
+            X-Diagnostic-Capture-State: { schema: { type: string, enum: [complete, incomplete] } }
             X-Diagnostic-Capture-Complete: { schema: { type: string, enum: ["true", "false"] } }
             Content-Disposition: { schema: { type: string } }
           content:
@@ -33372,7 +33530,7 @@ paths:
       - name: kind
         in: path
         required: true
-        description: '`client-request` is valid only when attemptId equals traceId.'
+        description: "`client-request` is valid only when attemptId equals traceId."
         schema: { type: string, enum: [request, response, client-request] }
     get:
       operationId: getApiUsageDiagnosticOverflowByTraceIdByAttemptIdByKind
@@ -33404,8 +33562,7 @@ paths:
           headers:
             Cache-Control: { schema: { type: string, const: "private, no-store" } }
             X-Content-Type-Options: { schema: { type: string, const: nosniff } }
-            X-Diagnostic-Capture-State:
-              { schema: { type: string, enum: [complete, incomplete] } }
+            X-Diagnostic-Capture-State: { schema: { type: string, enum: [complete, incomplete] } }
             X-Diagnostic-Capture-Complete: { schema: { type: string, enum: ["true", "false"] } }
             Content-Disposition: { schema: { type: string } }
           content:
@@ -35266,7 +35423,20 @@ components:
     ReasoningCacheStats:
       type: object
       required:
-        [memoryEntries, dbEntries, totalEntries, totalChars, hits, misses, replays, replayRate, byProvider, byModel, oldestEntry, newestEntry]
+        [
+          memoryEntries,
+          dbEntries,
+          totalEntries,
+          totalChars,
+          hits,
+          misses,
+          replays,
+          replayRate,
+          byProvider,
+          byModel,
+          oldestEntry,
+          newestEntry,
+        ]
       properties:
         memoryEntries: { type: integer, minimum: 0 }
         dbEntries: { type: integer, minimum: 0 }
@@ -36194,7 +36364,18 @@ components:
     ContextCompressionComboRecord:
       type: object
       required:
-        [id, name, description, pipeline, languagePacks, outputMode, outputModeIntensity, isDefault, createdAt, updatedAt]
+        [
+          id,
+          name,
+          description,
+          pipeline,
+          languagePacks,
+          outputMode,
+          outputModeIntensity,
+          isDefault,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id: { type: string }
         name: { type: string }
@@ -37083,7 +37264,16 @@ components:
         are never returned; `maskedApiKey` uses `****` for values up to eight characters and
         otherwise retains only the first and last four characters around `****`.
       required:
-        [provider, hasApiKey, hasAccessToken, hasRefreshToken, maskedApiKey, projectId, priority, isActive]
+        [
+          provider,
+          hasApiKey,
+          hasAccessToken,
+          hasRefreshToken,
+          maskedApiKey,
+          projectId,
+          priority,
+          isActive,
+        ]
       properties:
         provider: { type: string }
         authType: { type: string }
@@ -37492,7 +37682,22 @@ components:
       x-sensitive: true
       description: Whitelisted task detail includes the original prompt and council/test payloads.
       required:
-        [id, status, mode, repo, runner, summary, branch, error, updated_at, prompt, base_ref, tests, council, created_at]
+        [
+          id,
+          status,
+          mode,
+          repo,
+          runner,
+          summary,
+          branch,
+          error,
+          updated_at,
+          prompt,
+          base_ref,
+          tests,
+          council,
+          created_at,
+        ]
       properties:
         id: { type: string }
         status: { type: string }
@@ -37585,7 +37790,20 @@ components:
     WebhookMaskedRecord:
       type: object
       required:
-        [id, url, events, secret, enabled, description, created_at, last_triggered_at, last_status, failure_count, kind, metadata_encrypted]
+        [
+          id,
+          url,
+          events,
+          secret,
+          enabled,
+          description,
+          created_at,
+          last_triggered_at,
+          last_status,
+          failure_count,
+          kind,
+          metadata_encrypted,
+        ]
       properties:
         id: { type: string }
         url:
@@ -37614,7 +37832,20 @@ components:
       type: object
       x-sensitive: true
       required:
-        [id, url, events, secret, enabled, description, created_at, last_triggered_at, last_status, failure_count, kind, metadata_encrypted]
+        [
+          id,
+          url,
+          events,
+          secret,
+          enabled,
+          description,
+          created_at,
+          last_triggered_at,
+          last_status,
+          failure_count,
+          kind,
+          metadata_encrypted,
+        ]
       properties:
         id: { type: string }
         url:
@@ -37677,8 +37908,7 @@ components:
       additionalProperties: false
     WebhookDeliveryRecord:
       type: object
-      required:
-        [id, webhook_id, event_type, status, http_status, latency_ms, error, created_at]
+      required: [id, webhook_id, event_type, status, http_status, latency_ms, error, created_at]
       properties:
         id: { type: integer }
         webhook_id: { type: string }
@@ -37704,7 +37934,13 @@ components:
       required: [delivered, status, latencyMs, payloadSent, responseBody, error]
       properties:
         delivered: { type: boolean, description: True only when the destination returned HTTP 2xx. }
-        status: { type: integer, minimum: 0, maximum: 599, description: Zero means no HTTP response was received. }
+        status:
+          {
+            type: integer,
+            minimum: 0,
+            maximum: 599,
+            description: Zero means no HTTP response was received.,
+          }
         latencyMs: { type: integer, minimum: 0 }
         payloadSent:
           type: object
@@ -37817,7 +38053,17 @@ components:
       type: object
       x-sensitive: true
       required:
-        [installed, runnable, command, commandPath, runtimeMode, reason, config, hasOmniRoute, configPath]
+        [
+          installed,
+          runnable,
+          command,
+          commandPath,
+          runtimeMode,
+          reason,
+          config,
+          hasOmniRoute,
+          configPath,
+        ]
       properties:
         installed: { type: boolean, const: true }
         runnable: { type: boolean, const: true }
@@ -38135,7 +38381,8 @@ components:
     A2ATask:
       type: object
       x-sensitive: true
-      required: [id, skill, state, input, artifacts, events, metadata, createdAt, updatedAt, expiresAt]
+      required:
+        [id, skill, state, input, artifacts, events, metadata, createdAt, updatedAt, expiresAt]
       properties:
         id: { type: string }
         skill: { type: string }
@@ -38350,7 +38597,8 @@ components:
           required: [strategy, value]
           properties:
             strategy: { type: string, enum: [contains, exact, regex] }
-            value: { type: string, minLength: 1, maxLength: 20000, pattern: "\\S", x-sensitive: true }
+            value:
+              { type: string, minLength: 1, maxLength: 20000, pattern: "\\S", x-sensitive: true }
           additionalProperties: true
         tags:
           type: array
@@ -39533,7 +39781,14 @@ components:
     MitmStats:
       type: object
       required:
-        [startedAt, totalRequests, interceptedRequests, activeConnections, lastRequestAt, lastInterceptAt]
+        [
+          startedAt,
+          totalRequests,
+          interceptedRequests,
+          activeConnections,
+          lastRequestAt,
+          lastInterceptAt,
+        ]
       properties:
         startedAt: { type: [string, "null"], format: date-time }
         totalRequests: { type: integer, minimum: 0 }
@@ -41945,11 +42200,28 @@ components:
     RelayTokenSummary:
       type: object
       required:
-        [id, name, tokenPrefix, description, comboId, allowedModels, maxTokensPerRequest, maxRequestsPerMinute, maxRequestsPerDay, maxCostPerDay, enabled, createdAt, updatedAt, expiresAt, lastUsedAt]
+        [
+          id,
+          name,
+          tokenPrefix,
+          description,
+          comboId,
+          allowedModels,
+          maxTokensPerRequest,
+          maxRequestsPerMinute,
+          maxRequestsPerDay,
+          maxCostPerDay,
+          enabled,
+          createdAt,
+          updatedAt,
+          expiresAt,
+          lastUsedAt,
+        ]
       properties:
         id: { type: string }
         name: { type: string }
-        tokenPrefix: { type: string, description: Redacted prefix; this is not the raw relay credential. }
+        tokenPrefix:
+          { type: string, description: Redacted prefix; this is not the raw relay credential. }
         description: { type: string }
         comboId: { type: [string, "null"] }
         allowedModels: { type: string, description: JSON-serialized model allowlist. }
@@ -41969,11 +42241,34 @@ components:
     RelayTokenManagementRecord:
       type: object
       required:
-        [id, name, tokenHash, tokenPrefix, description, comboId, allowedModels, maxTokensPerRequest, maxRequestsPerMinute, maxRequestsPerDay, maxCostPerDay, enabled, createdAt, updatedAt, expiresAt, lastUsedAt, metadata]
+        [
+          id,
+          name,
+          tokenHash,
+          tokenPrefix,
+          description,
+          comboId,
+          allowedModels,
+          maxTokensPerRequest,
+          maxRequestsPerMinute,
+          maxRequestsPerDay,
+          maxCostPerDay,
+          enabled,
+          createdAt,
+          updatedAt,
+          expiresAt,
+          lastUsedAt,
+          metadata,
+        ]
       properties:
         id: { type: string }
         name: { type: string }
-        tokenHash: { type: string, x-sensitive: true, description: Stored SHA-256 hash; never the original raw token. }
+        tokenHash:
+          {
+            type: string,
+            x-sensitive: true,
+            description: Stored SHA-256 hash; never the original raw token.,
+          }
         tokenPrefix: { type: string }
         description: { type: string }
         comboId: { type: [string, "null"] }
@@ -41999,7 +42294,21 @@ components:
     RelayTokenLogEntry:
       type: object
       required:
-        [id, token_id, request_id, model, prompt_tokens, completion_tokens, cost, status, status_code, latency_ms, client_ip, user_agent, created_at]
+        [
+          id,
+          token_id,
+          request_id,
+          model,
+          prompt_tokens,
+          completion_tokens,
+          cost,
+          status,
+          status_code,
+          latency_ms,
+          client_ip,
+          user_agent,
+          created_at,
+        ]
       properties:
         id: { type: integer }
         token_id: { type: string }
@@ -42018,11 +42327,36 @@ components:
     RelayTokenDetailResponse:
       type: object
       required:
-        [id, name, tokenHash, tokenPrefix, description, comboId, allowedModels, maxTokensPerRequest, maxRequestsPerMinute, maxRequestsPerDay, maxCostPerDay, enabled, createdAt, updatedAt, expiresAt, lastUsedAt, metadata, usage, logs]
+        [
+          id,
+          name,
+          tokenHash,
+          tokenPrefix,
+          description,
+          comboId,
+          allowedModels,
+          maxTokensPerRequest,
+          maxRequestsPerMinute,
+          maxRequestsPerDay,
+          maxCostPerDay,
+          enabled,
+          createdAt,
+          updatedAt,
+          expiresAt,
+          lastUsedAt,
+          metadata,
+          usage,
+          logs,
+        ]
       properties:
         id: { type: string }
         name: { type: string }
-        tokenHash: { type: string, x-sensitive: true, description: Stored SHA-256 hash; never the original raw token. }
+        tokenHash:
+          {
+            type: string,
+            x-sensitive: true,
+            description: Stored SHA-256 hash; never the original raw token.,
+          }
         tokenPrefix: { type: string }
         description: { type: string }
         comboId: { type: [string, "null"] }
@@ -42076,7 +42410,8 @@ components:
       properties:
         id: { type: string }
         name: { type: string }
-        rawToken: { type: string, x-sensitive: true, description: Shown only in this creation response. }
+        rawToken:
+          { type: string, x-sensitive: true, description: Shown only in this creation response. }
         tokenPrefix: { type: string }
       additionalProperties: false
     RelayTokenPatchRequest:
@@ -47963,8 +48298,7 @@ components:
         webdavPassword is plaintext only for a caller accepted by the nested management check;
         other callers receive null and can inspect webdavPasswordSet instead.
       x-sensitive: true
-      required:
-        [webdavEnabled, webdavUsername, webdavPassword, webdavPasswordSet, vaultPath]
+      required: [webdavEnabled, webdavUsername, webdavPassword, webdavPasswordSet, vaultPath]
       properties:
         webdavEnabled: { type: boolean }
         webdavUsername:
@@ -48497,6 +48831,152 @@ components:
       properties:
         error: { type: string }
         code: { type: string }
+      additionalProperties: false
+
+    ZedCredentialOperationErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, const: false }
+        error: { type: string }
+        zedInstalled: { type: boolean }
+        zedDockerEnvironment: { type: boolean }
+      additionalProperties: false
+
+    ZedDiscoverCandidate:
+      type: object
+      description: Safe Zed keychain candidate metadata; contains no raw credential.
+      required: [provider, service, account, fingerprint]
+      properties:
+        provider: { type: string }
+        service: { type: string }
+        account: { type: string }
+        fingerprint:
+          type: string
+          pattern: "^[a-f0-9]{16}$"
+          description: First 16 lowercase hexadecimal characters of a credential SHA-256 digest.
+          x-sensitive: true
+      additionalProperties: false
+
+    ZedDiscoverSkippedCredential:
+      type: object
+      required: [provider, service, account, reason]
+      properties:
+        provider: { type: string }
+        service: { type: string }
+        account: { type: string }
+        reason: { type: string, enum: [unsupported provider, missing token] }
+      additionalProperties: false
+
+    ZedDiscoverResponse:
+      type: object
+      description: Sensitive keychain summary. Raw Zed API tokens are never returned.
+      x-sensitive: true
+      required: [success, zedInstalled, count, candidates, skipped]
+      properties:
+        success: { type: boolean, const: true }
+        zedInstalled: { type: boolean, const: true }
+        count: { type: integer, minimum: 0 }
+        candidates:
+          type: array
+          items: { $ref: "#/components/schemas/ZedDiscoverCandidate" }
+        skipped:
+          type: array
+          items: { $ref: "#/components/schemas/ZedDiscoverSkippedCredential" }
+      additionalProperties: false
+
+    ZedConfirmedAccount:
+      type: object
+      description: User-confirmed Zed keychain candidate; fingerprint, not a credential value.
+      x-sensitive: true
+      required: [service, account, fingerprint]
+      properties:
+        service: { type: string, minLength: 1, maxLength: 500 }
+        account: { type: string, minLength: 1, maxLength: 500 }
+        fingerprint:
+          type: string
+          minLength: 1
+          maxLength: 100
+          x-sensitive: true
+      additionalProperties: true
+
+    ZedImportRequest:
+      type: object
+      description: >-
+        The default two-step flow requires `confirmedAccounts`. Unknown properties are ignored by
+        the route's Zod parser. An empty confirmation list is valid. Missing/empty body is accepted
+        only in legacy one-step mode.
+      x-sensitive: true
+      required: [confirmedAccounts]
+      properties:
+        confirmedAccounts:
+          type: array
+          items: { $ref: "#/components/schemas/ZedConfirmedAccount" }
+      additionalProperties: true
+
+    ZedImportedCredentialSummary:
+      type: object
+      description: Selected account summary; never includes the raw token.
+      required: [provider, service, account, hasToken]
+      properties:
+        provider: { type: string }
+        service: { type: string }
+        account: { type: string }
+        hasToken: { type: boolean }
+      additionalProperties: false
+
+    ZedImportResponse:
+      type: object
+      description: >-
+        Sensitive import summary. `count` is the number of connections saved; `credentials` lists
+        the selected credentials attempted, with token-presence booleans only. The provider list
+        reflects those selected credentials and may include a provider whose individual save failed.
+      x-sensitive: true
+      required: [success, count, providers, credentials, zedInstalled]
+      properties:
+        success: { type: boolean, const: true }
+        count:
+          type: integer
+          minimum: 0
+          description: Number of provider connections successfully saved.
+        providers:
+          type: array
+          uniqueItems: true
+          description: Distinct providers represented in the selected credential summaries.
+          items: { type: string }
+        credentials:
+          type: array
+          description: Selected credentials attempted, including entries that failed to save.
+          items: { $ref: "#/components/schemas/ZedImportedCredentialSummary" }
+        zedInstalled: { type: boolean, const: true }
+      additionalProperties: false
+
+    ZedManualImportRequest:
+      type: object
+      description: >-
+        Manual provider token input. Unknown properties are ignored by the route's Zod parser.
+      x-sensitive: true
+      required: [provider, token]
+      properties:
+        provider: { type: string, minLength: 1, maxLength: 64 }
+        token:
+          type: string
+          minLength: 1
+          maxLength: 512
+          writeOnly: true
+          x-sensitive: true
+        label: { type: string, maxLength: 128 }
+      additionalProperties: true
+
+    ZedManualImportResponse:
+      type: object
+      description: Sensitive provider connection reference; the submitted token is not returned.
+      x-sensitive: true
+      required: [success, connectionId, provider]
+      properties:
+        success: { type: boolean, const: true }
+        connectionId: { type: string }
+        provider: { type: string }
       additionalProperties: false
 
     ProviderLoginRequest:
