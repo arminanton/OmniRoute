@@ -20,7 +20,10 @@ const PATHS = [
 
 export function detectZed(): DetectionResult {
   for (const p of PATHS) {
-    if (fs.existsSync(p)) return { installed: true, path: p };
+    // These are host-specific probe paths, not build assets. Keep the runtime
+    // check while preventing Turbopack from treating the dynamic path as a
+    // project-root file trace.
+    if (fs.existsSync(/* turbopackIgnore: true */ p)) return { installed: true, path: p };
   }
   return { installed: false };
 }

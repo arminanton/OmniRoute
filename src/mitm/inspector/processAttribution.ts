@@ -64,7 +64,10 @@ export function attributeProcess(localPort: number): ProcessInfo | null {
 function findInode(localPort: number): string | null {
   for (const f of ["/proc/net/tcp", "/proc/net/tcp6"]) {
     try {
-      const inode = parseProcNetTcpForInode(fs.readFileSync(f, "utf8"), localPort);
+      const inode = parseProcNetTcpForInode(
+        fs.readFileSync(/* turbopackIgnore: true */ f, "utf8"),
+        localPort
+      );
       if (inode && inode !== "0") return inode;
     } catch {
       // file may not exist (e.g. no tcp6) — continue
@@ -77,16 +80,18 @@ function findPidByInode(inode: string): number | null {
   const target = `socket:[${inode}]`;
   let pids: string[];
   try {
-    pids = fs.readdirSync("/proc").filter((d) => /^\d+$/.test(d));
+    pids = fs.readdirSync(/* turbopackIgnore: true */ "/proc").filter((d) => /^\d+$/.test(d));
   } catch {
     return null;
   }
   for (const pid of pids) {
     try {
-      const fds = fs.readdirSync(`/proc/${pid}/fd`);
+      const fds = fs.readdirSync(/* turbopackIgnore: true */ `/proc/${pid}/fd`);
       for (const fd of fds) {
         try {
-          if (fs.readlinkSync(`/proc/${pid}/fd/${fd}`) === target) return Number(pid);
+          if (fs.readlinkSync(/* turbopackIgnore: true */ `/proc/${pid}/fd/${fd}`) === target) {
+            return Number(pid);
+          }
         } catch {
           // fd vanished mid-scan — skip
         }
@@ -100,7 +105,9 @@ function findPidByInode(inode: string): number | null {
 
 function readProcessName(pid: number): string {
   try {
-    return fs.readFileSync(`/proc/${pid}/comm`, "utf8").trim() || "unknown";
+    return (
+      fs.readFileSync(/* turbopackIgnore: true */ `/proc/${pid}/comm`, "utf8").trim() || "unknown"
+    );
   } catch {
     return "unknown";
   }

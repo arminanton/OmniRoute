@@ -380,6 +380,49 @@ test("turbopack.ignoreIssue suppresses the compression module over-bundling warn
   assert.match(String(compressionRule.description), /Overly broad patterns/);
 });
 
+test("MITM host filesystem probes are ignored by Turbopack while the child server stays included", async () => {
+  const fs = await import("node:fs/promises");
+  const source = async (relativePath: string) =>
+    fs.readFile(path.join(process.cwd(), relativePath), "utf8");
+  const [zed, processAttribution, manager, caTrust] = await Promise.all([
+    source("src/mitm/detection/zed.ts"),
+    source("src/mitm/inspector/processAttribution.ts"),
+    source("src/mitm/manager.ts"),
+    source("src/mitm/tproxy/caTrust.ts"),
+  ]);
+
+  // Next 16.3.8 uses this exact path-argument annotation in its own server
+  // filesystem probes. It suppresses build-time tracing only; these checks
+  // still run at runtime against the host's Zed install, procfs, MITM state,
+  // and trust store. MITM state remains external runtime data; the one child
+  // executable is separately required in outputFileTracingIncludes below.
+  for (const [name, contents] of [
+    ["zed detection", zed],
+    ["process attribution", processAttribution],
+    ["MITM manager", manager],
+    ["TPROXY CA trust", caTrust],
+  ]) {
+    const unignoredCalls = [
+      ...contents.matchAll(/\bfs\.\w+\(\s*(?!\/\* turbopackIgnore: true \*\/)/g),
+    ];
+    assert.deepEqual(
+      unignoredCalls.map(([call]) => call),
+      [],
+      `${name} filesystem paths should remain runtime-only for Turbopack tracing`
+    );
+  }
+
+  const { default: nextConfig } = await loadNextConfig("mitm-runtime-asset");
+  const tracingIncludes =
+    nextConfig.outputFileTracingIncludes?.["/*"] ||
+    nextConfig.outputFileTracingIncludes?.["**/*"] ||
+    [];
+  assert.ok(
+    tracingIncludes.includes("./src/mitm/server.cjs"),
+    "the MITM child server remains an explicit standalone runtime asset"
+  );
+});
+
 test("optimizePackageImports excludes the internal @omniroute/open-sse workspace (build-OOM guard)", async () => {
   // Regression guard: adding the internal `@omniroute/open-sse` workspace to
   // optimizePackageImports makes Next.js resolve its entire barrel at build

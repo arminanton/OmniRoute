@@ -48,17 +48,18 @@ export interface CaTrustDeps {
 
 function detectCertConfig(): { dir: string; cmd: string } {
   for (const c of LINUX_CERT_PATHS) {
-    if (fs.existsSync(c.dir)) return c;
+    if (fs.existsSync(/* turbopackIgnore: true */ c.dir)) return c;
   }
   return LINUX_CERT_PATHS[0];
 }
 
 const realDeps: CaTrustDeps = {
   run: execFileWithPassword,
-  writeFile: (filePath, data) => fs.writeFileSync(filePath, data, { mode: 0o644 }),
+  writeFile: (filePath, data) =>
+    fs.writeFileSync(/* turbopackIgnore: true */ filePath, data, { mode: 0o644 }),
   rmFile: (filePath) => {
     try {
-      fs.unlinkSync(filePath);
+      fs.unlinkSync(/* turbopackIgnore: true */ filePath);
     } catch {
       // best-effort cleanup
     }
