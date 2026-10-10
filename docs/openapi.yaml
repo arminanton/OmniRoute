@@ -369,22 +369,22 @@ paths:
                   required: [action, model]
                   properties:
                     action: { type: string, const: acquire }
-                    model: { type: string, minLength: 1, maxLength: 512 }
+                    model: { type: string, minLength: 1, maxLength: 512, pattern: "\\S" }
                 - type: object
                   required: [action, generation]
                   properties:
                     action: { type: string, const: status }
-                    generation: { type: integer, minimum: 1 }
+                    generation: { type: integer, minimum: 1, maximum: 9007199254740991 }
                 - type: object
                   required: [action, generation]
                   properties:
                     action: { type: string, const: renew }
-                    generation: { type: integer, minimum: 1 }
+                    generation: { type: integer, minimum: 1, maximum: 9007199254740991 }
                 - type: object
                   required: [action, generation]
                   properties:
                     action: { type: string, const: release }
-                    generation: { type: integer, minimum: 1 }
+                    generation: { type: integer, minimum: 1, maximum: 9007199254740991 }
                     reason:
                       type: string
                       enum: [OWNER_EXIT, CLIENT_CANCELLED]
@@ -397,14 +397,29 @@ paths:
                 $ref: "#/components/schemas/ExclusiveConnectionLeaseLifecycle"
         "400":
           description: Missing or invalid lease context/action
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
           description: Missing or invalid API key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "403":
           description: Managed lease scope or key configuration required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "409":
           description: Stale generation, missing binding, or connection fence rejection
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "415":
           description: Lifecycle mutations require application/json
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "429":
           description: >-
             Either temporary lease occupancy (`WAITING_FOR_CAPACITY`, with `Retry-After`) or
@@ -420,6 +435,11 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/ExclusiveConnectionLeaseCapacity"
                   - $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          description: Lease model lookup or lease-service operation is unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   # --- Playground + Search Tools (plans 17+18) ---
   /api/playground/improve-prompt:
     post:
@@ -18060,10 +18080,29 @@ paths:
                 additionalProperties: true
         "401":
           description: No usable `elevenlabs` credential is configured.
+          content:
+            "*/*":
+              schema: {}
         "429":
           description: Every configured `elevenlabs` credential is rate limited.
+          content:
+            "*/*":
+              schema: {}
         "500":
-          $ref: "#/components/responses/InternalError"
+          description: Upstream HTTP 500 body is relayed unchanged.
+          content:
+            "*/*":
+              schema: {}
+        "502":
+          description: The proxy could not reach ElevenLabs; a 502 response body is returned.
+          content:
+            "*/*":
+              schema: {}
+        default:
+          description: Any other upstream status and response body are relayed unchanged.
+          content:
+            "*/*":
+              schema: {}
   /api/v1/speech-to-text:
     post:
       operationId: postApiV1SpeechToText
@@ -18102,10 +18141,29 @@ paths:
               schema: { type: string }
         "401":
           description: No usable `elevenlabs` credential is configured.
+          content:
+            "*/*":
+              schema: {}
         "429":
           description: Every configured `elevenlabs` credential is rate limited.
+          content:
+            "*/*":
+              schema: {}
         "500":
-          $ref: "#/components/responses/InternalError"
+          description: Upstream HTTP 500 body is relayed unchanged.
+          content:
+            "*/*":
+              schema: {}
+        "502":
+          description: The proxy could not reach ElevenLabs; a 502 response body is returned.
+          content:
+            "*/*":
+              schema: {}
+        default:
+          description: Any other upstream status and response body are relayed unchanged.
+          content:
+            "*/*":
+              schema: {}
   /api/v1/text-to-speech/{voiceId}:
     post:
       operationId: postApiV1TextToSpeechByVoiceId
@@ -18149,12 +18207,34 @@ paths:
               schema: { type: string, format: binary }
         "400":
           description: Invalid ElevenLabs voice ID.
+          content:
+            "*/*":
+              schema: {}
         "401":
           description: No usable `elevenlabs` credential is configured.
+          content:
+            "*/*":
+              schema: {}
         "429":
           description: Every configured `elevenlabs` credential is rate limited.
+          content:
+            "*/*":
+              schema: {}
         "500":
-          $ref: "#/components/responses/InternalError"
+          description: Upstream HTTP 500 body is relayed unchanged.
+          content:
+            "*/*":
+              schema: {}
+        "502":
+          description: The proxy could not reach ElevenLabs; a 502 response body is returned.
+          content:
+            "*/*":
+              schema: {}
+        default:
+          description: Any other upstream status and response body are relayed unchanged.
+          content:
+            "*/*":
+              schema: {}
   /api/v1/explain/routing:
     get:
       operationId: getApiV1ExplainRouting
@@ -40769,6 +40849,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Request body exceeds the chat hard-size or ingest-byte admission limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "429":
           description: All eligible upstream accounts are rate limited.
           content:
@@ -40779,6 +40864,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "504":
+          $ref: "#/components/responses/InferenceProviderError"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/auto-combo/{channel}/candidates:

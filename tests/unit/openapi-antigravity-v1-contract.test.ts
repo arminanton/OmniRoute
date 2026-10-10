@@ -40,6 +40,11 @@ test("/api/v1/antigravity documents the authenticated Cloud Code request and JSO
     "#/components/schemas/AntigravityCloudCodeResponse"
   );
   assert.equal(operation.responses["200"].content["text/event-stream"].schema.type, "string");
+  assert.equal(
+    operation.responses["413"].content["application/json"].schema.$ref,
+    "#/components/schemas/ApiErrorResponse"
+  );
+  assert.equal(operation.responses["504"].$ref, "#/components/responses/InferenceProviderError");
   assert.equal(operation.responses["503"].$ref, "#/components/responses/ServiceUnavailable");
   assert.equal(
     spec.components.schemas.AntigravityCloudCodeRequest.properties?.request?.$ref,

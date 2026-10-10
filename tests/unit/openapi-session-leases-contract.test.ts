@@ -43,6 +43,27 @@ test("session lease 429 documents both source-backed response shapes", () => {
   assert.equal(capacity.properties.error.properties.code.const, "LEASE_CAPACITY_UNAVAILABLE");
 });
 
+test("session lease documents JSON error bodies, service unavailability, and validator bounds", () => {
+  assert.ok(operation, "missing POST /api/v1/session-leases");
+  for (const status of ["400", "401", "403", "409", "415", "503"]) {
+    assert.equal(
+      operation.responses?.[status]?.content?.["application/json"]?.schema?.$ref,
+      "#/components/schemas/ApiErrorResponse",
+      `HTTP ${status} has the source JSON error envelope`
+    );
+  }
+
+  const actions = operation.requestBody?.content?.["application/json"]?.schema?.oneOf ?? [];
+  const acquire = actions.find((schema: any) => schema.properties?.action?.const === "acquire");
+  assert.equal(acquire?.properties?.model?.pattern, "\\S");
+  for (const actionName of ["status", "renew", "release"]) {
+    const actionSchema = actions.find(
+      (schema: any) => schema.properties?.action?.const === actionName
+    );
+    assert.equal(actionSchema?.properties?.generation?.maximum, Number.MAX_SAFE_INTEGER);
+  }
+});
+
 test("the published OpenAPI document matches the canonical session lease contract", () => {
   assert.equal(publicText, canonicalText);
 });
