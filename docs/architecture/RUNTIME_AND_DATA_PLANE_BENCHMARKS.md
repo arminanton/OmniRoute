@@ -1590,6 +1590,56 @@ on this ARM64 host, while a 100 MiB allocation control reported `process.memoryU
 peak, so the harness now reports `/proc` `VmHWM` rather than converting that raw value into a
 misleading multi-GiB RSS estimate.
 
+#### Current-source request-capture path and reservation-cap experiment
+
+`scripts/perf/bench-call-log-capture-path.mjs` exercises the production `RequestLogger`,
+`createPreparedRequestLogger`, `captureCurrentProviderBody`, `runWithCapture` fetch wrapper, stream
+append taps, `saveCallLog`, SQLite, and artifact worker against a deterministic fake upstream. It
+does not start Next.js or call a provider. Each run uses a private temporary `DATA_DIR`, removed at
+exit. Reproduce the bounded stream-chunk pair with:
+
+```bash
+node --import tsx/esm scripts/perf/bench-call-log-capture-path.mjs 70 1048576 8649 false true
+node --import tsx/esm scripts/perf/bench-call-log-capture-path.mjs 70 1048576 8649 true true
+```
+
+This single pair used 70 serialized 1 MiB requests and 9,610-byte streamed responses per request
+(10 chunks). The finalizer guard recognized all 70 already-prepared URL/header/body tuples and
+skipped the redundant target-log attempt. With the default 128 MiB aggregate preparation limit,
+both modes captured all fake requests but stored only 6/70 detail artifacts; the other 64 were
+refused before serialization because each 1 MiB request reserved about 20.1 MiB.
+
+| Stream chunks | Details ready | Reserved-byte high-water | Artifacts written | Process write bytes | Sampled RSS / heap | Kernel `VmHWM` |
+| ------------- | ------------: | -----------------------: | ----------------: | ------------------: | ----------------: | -------------: |
+| off           |          6/70 |            126,350,088 B |       6,299,220 B |        13,742,080 B | 423.1 / 250.7 MiB |      439.8 MiB |
+| on            |          6/70 |            127,593,240 B |       6,359,652 B |        13,791,232 B | 485.9 / 320.1 MiB |      488.1 MiB |
+
+This is one run per mode; the RSS/heap difference is not attributed because payload and GC variance
+can dominate this small synthetic comparison. The stable differences were about 1.24 MiB of
+reservation, 49 KiB of process writes, and 60 KiB of artifacts, with identical admission and
+artifact completeness. In this workload, stream excerpts were not the principal reason details
+were omitted.
+
+An isolated capacity experiment temporarily raised the in-memory reservation constant to 2 GiB
+and ran the same 70 × 1 MiB request workload under `node --max-old-space-size=2048`; the source
+constant was restored to 128 MiB immediately afterward. All 70 details completed, with 73,490,961
+artifact bytes, 81,199,104 process write bytes, 1,474,085,580 reserved bytes at high-water, and
+629.3 MiB kernel `VmHWM` (565.4 MiB sampled RSS, 268.3 MiB sampled heap). This demonstrates that the
+current estimate can refuse a 70-request synthetic batch well before this fixture reaches the
+2 GiB heap limit. It does **not** establish that increasing the production cap is safe: this harness
+does not include Omni startup memory, cgroup pressure, other concurrent work, real provider
+responses, or requests larger than 1 MiB. Keep the default unchanged pending a controlled
+high-context app/cgroup measurement.
+
+An exact-capture allocation audit also found two avoidable operations. `captureCurrentProviderBody`
+now checks whether the same URL and serialized body are already prepared before parsing JSON, and
+ChatCore's post-executor log checks the prepared URL, body identity, and normalized header values
+before calling `logTargetRequest` again. Prepared header values are snapshotted so an in-place
+mutated retry cannot be mistaken for the earlier request. The unit test confirms the exact-repeat
+path makes zero JSON parses and changed body/header attempts still capture. The harness reports 70
+duplicate finalizer log attempts skipped. Single-run RSS values remain too noisy to claim a heap
+reduction from that optimization.
+
 ## Request-logger lifecycle stress
 
 The writer-only benchmark above starts from an already-built log payload. A second harness now
