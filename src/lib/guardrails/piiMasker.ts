@@ -79,72 +79,117 @@ function cloneAndMaskRequestPayload(payload: unknown) {
     return { detections: [] as PiiDetection[], modified: false, payload };
   }
 
-  const clonedPayload: JsonRecord = JSON.parse(JSON.stringify(payload));
+  const payloadRecord = payload as JsonRecord;
   const detections: PiiDetection[] = [];
   let modified = false;
 
   const sanitizeMessageLikeList = (list: unknown) => {
     if (!Array.isArray(list)) return list;
-    return list.map((entry) => {
+    let listModified = false;
+    const nextList = list.map((entry) => {
       // Responses API can pass plain strings in input[]
       if (typeof entry === "string") {
         const result = sanitizeStringValue(entry);
         detections.push(...result.detections);
-        modified ||= result.modified;
-        return result.text;
+        if (result.modified) {
+          listModified = true;
+          return result.text;
+        }
+        return entry;
       }
       if (!entry || typeof entry !== "object") return entry;
-      const record = { ...(entry as JsonRecord) };
+      const record = entry as JsonRecord;
+      let entryModified = false;
+      let nextContent = record.content;
+      let nextText = record.text;
+
       if ("content" in record) {
         const result = applyToContentValue(record.content, detections);
-        modified ||= result.modified;
-        record.content = result.value;
+        if (result.modified) {
+          entryModified = true;
+          nextContent = result.value;
+        }
       }
       if (typeof record.text === "string") {
         const result = sanitizeStringValue(record.text);
         detections.push(...result.detections);
-        modified ||= result.modified;
-        record.text = result.text;
+        if (result.modified) {
+          entryModified = true;
+          nextText = result.text;
+        }
       }
-      return record;
+      if (entryModified) {
+        listModified = true;
+        return {
+          ...record,
+          ...("content" in record ? { content: nextContent } : {}),
+          ...(typeof record.text === "string" ? { text: nextText } : {}),
+        };
+      }
+      return entry;
     });
+
+    if (listModified) {
+      modified = true;
+      return nextList;
+    }
+    return list;
   };
 
-  if (typeof clonedPayload.system === "string") {
-    const result = sanitizeStringValue(clonedPayload.system);
+  let nextSystem = payloadRecord.system;
+  let nextMessages = payloadRecord.messages;
+  let nextInput = payloadRecord.input;
+  let nextPrompt = payloadRecord.prompt;
+
+  if (typeof payloadRecord.system === "string") {
+    const result = sanitizeStringValue(payloadRecord.system);
     detections.push(...result.detections);
-    modified ||= result.modified;
-    clonedPayload.system = result.text;
-  } else if (Array.isArray(clonedPayload.system)) {
-    clonedPayload.system = sanitizeMessageLikeList(clonedPayload.system);
+    if (result.modified) {
+      modified = true;
+      nextSystem = result.text;
+    }
+  } else if (Array.isArray(payloadRecord.system)) {
+    nextSystem = sanitizeMessageLikeList(payloadRecord.system);
   }
 
-  if (Array.isArray(clonedPayload.messages)) {
-    clonedPayload.messages = sanitizeMessageLikeList(clonedPayload.messages);
+  if (Array.isArray(payloadRecord.messages)) {
+    nextMessages = sanitizeMessageLikeList(payloadRecord.messages);
   }
 
-  if (Array.isArray(clonedPayload.input)) {
-    clonedPayload.input = sanitizeMessageLikeList(clonedPayload.input);
-  } else if (typeof clonedPayload.input === "string") {
-    const result = sanitizeStringValue(clonedPayload.input);
+  if (Array.isArray(payloadRecord.input)) {
+    nextInput = sanitizeMessageLikeList(payloadRecord.input);
+  } else if (typeof payloadRecord.input === "string") {
+    const result = sanitizeStringValue(payloadRecord.input);
     detections.push(...result.detections);
-    modified ||= result.modified;
-    clonedPayload.input = result.text;
+    if (result.modified) {
+      modified = true;
+      nextInput = result.text;
+    }
   }
 
-  if (typeof clonedPayload.prompt === "string") {
-    const result = sanitizeStringValue(clonedPayload.prompt);
+  if (typeof payloadRecord.prompt === "string") {
+    const result = sanitizeStringValue(payloadRecord.prompt);
     detections.push(...result.detections);
-    modified ||= result.modified;
-    clonedPayload.prompt = result.text;
-  } else if (Array.isArray(clonedPayload.prompt)) {
-    clonedPayload.prompt = sanitizeMessageLikeList(clonedPayload.prompt);
+    if (result.modified) {
+      modified = true;
+      nextPrompt = result.text;
+    }
+  } else if (Array.isArray(payloadRecord.prompt)) {
+    nextPrompt = sanitizeMessageLikeList(payloadRecord.prompt);
   }
 
   return {
     detections,
     modified,
-    payload: modified ? clonedPayload : payload,
+    payload: modified
+      ? {
+          ...payloadRecord,
+          ...(nextSystem !== payloadRecord.system ? { system: nextSystem } : {}),
+          ...(nextMessages !== payloadRecord.messages ? { messages: nextMessages } : {}),
+          ...(nextInput !== payloadRecord.input ? { input: nextInput } : {}),
+          ...(nextPrompt !== payloadRecord.prompt ? { prompt: nextPrompt } : {}),
+        }
+      : payload,
   };
 }
 

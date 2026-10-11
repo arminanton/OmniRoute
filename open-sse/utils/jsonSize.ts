@@ -19,36 +19,32 @@
  */
 
 const BASE64_DATA_URI_RE = /data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/gi;
+const ESC_OR_SURROGATE_RE = /[\u0000-\u001f"\\\ud800-\udfff]/;
+const ESC_GLOBAL = /[\u0000-\u001f"\\]|[\ud800-\udbff][\udc00-\udfff]|[\ud800-\udfff]/g;
 
 /** Length of a JSON-encoded string, including the surrounding quotes. */
 function encodedStringLength(value: string, stripBase64 = false): number {
   const target = stripBase64 ? value.replace(BASE64_DATA_URI_RE, "") : value;
-  let len = 2; // the quotes
-  for (let i = 0; i < target.length; i++) {
-    const code = target.charCodeAt(i);
-    if (code === 0x22 || code === 0x5c) {
-      len += 2; // \" and \\
-    } else if (code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d) {
-      len += 2; // \b \t \n \f \r
-    } else if (code < 0x20) {
-      len += 6; // \u00XX
-    } else if (code >= 0xd800 && code <= 0xdfff) {
-      // Surrogates: a well-formed pair serializes as its two code units (2 chars); a LONE
-      // surrogate is escaped as \uXXXX since ES2019 well-formed JSON.stringify.
-      const isHigh = code <= 0xdbff;
-      const next = isHigh ? target.charCodeAt(i + 1) : NaN;
-      const paired = isHigh && next >= 0xdc00 && next <= 0xdfff;
-      if (paired) {
-        len += 2;
-        i++; // consume the low surrogate
-      } else {
-        len += 6;
-      }
+  if (!ESC_OR_SURROGATE_RE.test(target)) return target.length + 2;
+
+  let extra = 2; // the quotes
+  ESC_GLOBAL.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = ESC_GLOBAL.exec(target)) !== null) {
+    const s = match[0];
+    if (s.length === 2) {
+      // Paired surrogate -> serializes as 2 code units, same as JS string length
+      continue;
+    }
+    const code = s.charCodeAt(0);
+    if (code === 0x22 || code === 0x5c || code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d) {
+      extra += 1;
     } else {
-      len += 1;
+      // control char < 0x20 or lone surrogate: serializes as \uXXXX (6 chars instead of 1, so +5 extra)
+      extra += 5;
     }
   }
-  return len;
+  return target.length + extra;
 }
 
 /** True for values JSON.stringify drops (object values) or renders as null (array items). */

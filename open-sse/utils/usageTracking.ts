@@ -405,12 +405,18 @@ function hasRemoteContextReference(value: unknown, depth = 0): boolean {
   return false;
 }
 
+const bodyBytesCache = new WeakMap<object, number>();
+
 function getSerializedBodyBytes(body: unknown): number | null {
   if (!body || typeof body !== "object" || hasRemoteContextReference(body)) return null;
+  const cached = bodyBytesCache.get(body as object);
+  if (cached !== undefined) return cached;
   try {
     const serialized = JSON.stringify(body);
     if (!serialized) return null;
-    return Buffer.byteLength(serialized, "utf8");
+    const bytes = Buffer.byteLength(serialized, "utf8");
+    bodyBytesCache.set(body as object, bytes);
+    return bytes;
   } catch {
     return null;
   }
@@ -427,6 +433,12 @@ function tokenNumber(value: unknown): number {
 export function isInputTokenCountPlausible(inputTokens: unknown, body: unknown): boolean {
   if (typeof inputTokens !== "number" || !Number.isFinite(inputTokens) || inputTokens < 0) {
     return false;
+  }
+
+  // Since bodyBytes >= 0, maximum is at least INPUT_USAGE_FIXED_ALLOWANCE (8192).
+  // If reported tokens are within the fixed allowance, it is trivially plausible without inspecting body.
+  if (inputTokens <= INPUT_USAGE_FIXED_ALLOWANCE) {
+    return true;
   }
 
   const bodyBytes = getSerializedBodyBytes(body);
@@ -871,6 +883,11 @@ function estimateTokenCount(text: unknown) {
 
   // Remove CJK chars for the remaining estimation
   const nonCJK = text.replace(/[\u3000-\u9fff\uf900-\ufaff]/g, " ");
+
+  // For very large text, avoid freezing Node's event loop with split regex over millions of chars
+  if (nonCJK.length > 65536) {
+    return cjkCount + Math.ceil(nonCJK.length / 3.5);
+  }
 
   // Split on token boundaries: whitespace, punctuation, camelCase transitions
   const tokens = nonCJK

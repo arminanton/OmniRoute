@@ -190,7 +190,7 @@ export function evaluatePromptInjection(
     info() {},
     warn() {},
   } as Console);
-  const contents = extractMessageContents(body);
+  const contents = extractMessageContents(body, MAX_INJECTION_SCAN_BYTES);
   // Bound the custom-pattern scan to the first 16 KB, matching detectInjection's
   // cap inside sanitizeRequest above (hot-path perf, #3932 / #4041). Injection
   // directives sit near the top; scanning the full join buys only CPU/GC.

@@ -142,8 +142,21 @@ function getConfig() {
  * @param {Object} body
  * @returns {string[]}
  */
-function extractMessageContents(body) {
+function extractMessageContents(body, maxChars = Infinity) {
   const contents = [];
+  let totalChars = 0;
+
+  const pushString = (str) => {
+    if (typeof str !== "string" || totalChars >= maxChars) return;
+    if (totalChars + str.length > maxChars) {
+      const needed = maxChars - totalChars;
+      contents.push(str.slice(0, needed));
+      totalChars = maxChars;
+    } else {
+      contents.push(str);
+      totalChars += str.length;
+    }
+  };
 
   const messageSource = body.messages !== undefined ? body.messages : body.input;
   const messages = Array.isArray(messageSource)
@@ -152,44 +165,55 @@ function extractMessageContents(body) {
       ? []
       : [messageSource];
   for (const msg of messages) {
+    if (totalChars >= maxChars) break;
     if (typeof msg === "string") {
-      contents.push(msg);
+      pushString(msg);
     } else if (msg && typeof msg.content === "string") {
-      contents.push(msg.content);
+      pushString(msg.content);
     } else if (msg && Array.isArray(msg.content)) {
       for (const part of msg.content) {
+        if (totalChars >= maxChars) break;
         if (typeof part === "string") {
-          contents.push(part);
-        } else if (part.text) {
-          contents.push(part.text);
+          pushString(part);
+        } else if (part && typeof part.text === "string") {
+          pushString(part.text);
         }
       }
     }
   }
 
   // Also check system prompt
-  if (typeof body.system === "string") {
-    contents.push(body.system);
-  } else if (Array.isArray(body.system)) {
-    for (const s of body.system) {
-      if (typeof s === "string") contents.push(s);
-      else if (s.text) contents.push(s.text);
+  if (totalChars < maxChars) {
+    if (typeof body.system === "string") {
+      pushString(body.system);
+    } else if (Array.isArray(body.system)) {
+      for (const s of body.system) {
+        if (totalChars >= maxChars) break;
+        if (typeof s === "string") pushString(s);
+        else if (s && typeof s.text === "string") pushString(s.text);
+      }
     }
   }
 
-  if (typeof body.input === "string") contents.push(body.input);
-  if (typeof body.prompt === "string") contents.push(body.prompt);
-  else if (Array.isArray(body.prompt))
-    for (const p of body.prompt) {
-      if (typeof p === "string") contents.push(p);
+  if (totalChars < maxChars && typeof body.input === "string") pushString(body.input);
+  if (totalChars < maxChars) {
+    if (typeof body.prompt === "string") pushString(body.prompt);
+    else if (Array.isArray(body.prompt)) {
+      for (const p of body.prompt) {
+        if (totalChars >= maxChars) break;
+        if (typeof p === "string") pushString(p);
+      }
     }
-  if (typeof body.instructions === "string") contents.push(body.instructions);
-  if (typeof body.query === "string") contents.push(body.query);
-  if (Array.isArray(body.documents))
+  }
+  if (totalChars < maxChars && typeof body.instructions === "string") pushString(body.instructions);
+  if (totalChars < maxChars && typeof body.query === "string") pushString(body.query);
+  if (totalChars < maxChars && Array.isArray(body.documents)) {
     for (const d of body.documents) {
-      if (typeof d === "string") contents.push(d);
-      else if (d && typeof d.text === "string") contents.push(d.text);
+      if (totalChars >= maxChars) break;
+      if (typeof d === "string") pushString(d);
+      else if (d && typeof d.text === "string") pushString(d.text);
     }
+  }
 
   return contents;
 }
@@ -229,11 +253,17 @@ function processPII(text, redact = false) {
   const detections = [];
   let processed = text;
   const hasEmailCandidate = text.includes("@");
+  const hasDigit = /\d/.test(text);
 
   for (const rule of PII_PATTERNS) {
-    // Most prompts and source files contain no email candidate; don't run the
-    // email expression across their full text when this sentinel is absent.
-    if (rule.name === "email" && !hasEmailCandidate) continue;
+    if (rule.name === "email") {
+      if (!hasEmailCandidate) continue;
+    } else {
+      if (!hasDigit) continue;
+      if (rule.name === "cpf" && (!text.includes(".") || !text.includes("-"))) continue;
+      if (rule.name === "cnpj" && (!text.includes("/") || !text.includes("-"))) continue;
+      if (rule.name === "ssn_us" && !text.includes("-")) continue;
+    }
     const matches = text.match(rule.pattern);
     if (matches && matches.length > 0) {
       detections.push({ type: rule.name, count: matches.length });
@@ -266,7 +296,11 @@ export function sanitizeRequest(body, logger = console) {
 
   if (!config.enabled) return result;
 
-  const contents = extractMessageContents(body);
+  // Injection directives sit near the top. When PII redaction is disabled (default),
+  // only extract up to MAX_INJECTION_SCAN_BYTES to avoid multi-megabyte allocations.
+  const contents = config.piiRedaction
+    ? extractMessageContents(body)
+    : extractMessageContents(body, MAX_INJECTION_SCAN_BYTES);
   const fullText = contents.join("\n");
 
   // ── Prompt Injection Detection ──
