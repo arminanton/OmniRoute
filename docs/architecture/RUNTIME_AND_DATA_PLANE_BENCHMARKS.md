@@ -1514,25 +1514,36 @@ the existing size-limit path, so this optimization can reduce detail retention u
 cardinality payloads. Private overflow captures are separate and retain exact bytes subject to their
 own limits.
 
-### Timestamp-aware stream-frame interning probe (2026-10-10)
+### Timestamp-aware stream-frame interning (schema 11, 2026-10-11)
 
-`npm run bench:call-log-stream-frame-table` compares the production artifact writer with a
-benchmark-only candidate representation. One synthetic 32,824-byte SSE frame is recorded once in
-each of the provider, OpenAI, and client tracks, with three distinct capture timestamps. The current
-writer stored 99,000 bytes; the candidate stored one frame dictionary entry plus three timestamp/
-index pairs at 33,398 bytes, a modeled 65,602-byte (66.26%) reduction under the unchanged 512 KiB
-pipeline cap. The script reads the current artifact through `readCallArtifact()` and verifies that a
-small candidate decoder reconstructs every timestamped track string in the same order. Its one-run
-write times were 6.145 ms for current then 0.947 ms for the candidate; these sequential samples are
-not a speed comparison because they include first-write and filesystem-cache effects.
+Production stream capture prefixes each chunk with its own `[HH:mm:ss.SSS]` time. Identical frame
+payloads on provider/OpenAI/client tracks therefore differed as complete strings and escaped the
+schema-8 exact-chunk table. Schema 11 adds a second private encoding: one dictionary of exact frame
+payloads and per-track `[timestamp, index]` pairs. The writer applies it only when every chunk has the
+expected timestamp prefix and the full serialized representation is smaller than both the raw
+arrays and the existing exact-string encoding; unique/unparseable chunks stay in their original
+shape. `readCallArtifact()` validates the timestamps and indexes, then reconstructs the original
+timestamp-prefixed strings before returning data to logs, APIs, exports, or continuation consumers.
 
-The 2026-10-11 rerun measured 6.182 ms for the current write and 0.877 ms for the candidate, again
-on one ordered fixture. The timestamp/ref encoding exists only inside this measurement. Production
-capture still stores timestamp-prefixed strings, production readers do not decode the candidate
-format, and no production queue-memory, request-heap, SSE-latency, or conversation-reconstruction
-savings were measured. The next validation before any format change would be a focused production
-reader/writer prototype test that preserves byte-identical reconstructed stream strings, followed by
-a bounded lifecycle run.
+`npm run bench:call-log-stream-frame-table` runs twenty local production-writer iterations with 100
+synthetic frames per track and 512-byte text deltas. When all three tracks share payloads but have
+different timestamps, the stream representation falls from 181,836 to 65,173 bytes (64.16%); the
+full artifact median is 65,577 bytes, median synchronous writer time is 3.511 ms, and queue
+projection plus footprint estimation is 1.528 ms. With two tracks sharing the same payloads, it
+falls from 182,536 to 125,083 bytes (31.47%); the full artifact median is 125,490 bytes, writer time
+is 4.403 ms, and projection/estimation is 1.591 ms. When all payloads are unique, the table is
+refused and the stream remains 184,136 bytes (full artifact 184,540 bytes; writer 5.541 ms;
+projection/estimation 1.412 ms). Exact readback passes in all cases.
+
+A separate burst submitted 70 independently allocated timestamped artifacts at once. All 70 were
+stored and read back; the queue peaked at 69 waiting jobs, reservation high-water was 51,551,960 of
+134,217,728 bytes, with zero detail omissions or worker failures. The burst completed in 309.572 ms.
+This exercises the artifact writer and queue, not the full HTTP/provider route, and records no
+process RSS peak. The payload-dedup and artifact-worker suites pass 46/46, including malformed
+timestamp/index rejection, unique-frame fallback, and asynchronous worker round-trip;
+`typecheck:core` passes. The new disk representation requires a schema-11-aware reader.
+Cross-version rollback/read behavior and full 70–100-session application/provider requests remain
+unverified, so this is not production-deployment evidence.
 
 Structured `error`/`fatal` repeat suppression is a different mechanism. It scopes the 5-second
 deduplication key to severity and component, does not retain messages over 4,096 characters, expires

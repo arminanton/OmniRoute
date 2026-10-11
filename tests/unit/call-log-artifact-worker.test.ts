@@ -158,6 +158,53 @@ test("async worker writes call-log artifact and returns matching metadata", asyn
   assert.deepEqual(JSON.parse(serialized), artifact);
 });
 
+test("70 concurrent artifact writes preserve timestamped frames without queue refusals", async () => {
+  const before = getCallLogArtifactWriterSnapshot();
+  const tracks = ["provider", "openai", "client"];
+  const frameCount = 20;
+  const artifacts = Array.from({ length: 70 }, (_, session) => {
+    const streamChunks = Object.fromEntries(
+      tracks.map((track, trackIndex) => [
+        track,
+        Array.from({ length: frameCount }, (_unused, frame) => {
+          const milliseconds = String(
+            (session * frameCount * tracks.length + frame * tracks.length + trackIndex) % 1000
+          ).padStart(3, "0");
+          const payload = `data: ${JSON.stringify({ type: "response.output_text.delta", delta: `frame-${frame}:${"x".repeat(512)}` })}\n\n`;
+          return `[12:00:00.${milliseconds}] ${payload}`;
+        }),
+      ])
+    );
+    return {
+      ...buildArtifact(`worker-timestamped-parallel-${session}`),
+      schemaVersion: 10,
+      pipeline: { streamChunks },
+    } as unknown as CallLogArtifact;
+  });
+
+  const results = await Promise.all(artifacts.map((artifact) => writeCallArtifactAsync(artifact)));
+  assert.equal(results.filter(Boolean).length, artifacts.length);
+  const after = getCallLogArtifactWriterSnapshot();
+  assert.equal(after.preparationRefusalsTotal, before.preparationRefusalsTotal);
+  assert.equal(after.detailOmissionsTotal, before.detailOmissionsTotal);
+  assert.equal(after.queuedArtifacts, 0);
+  assert.equal(after.activeJobs, 0);
+  assert.equal(after.reservedArtifactBytes, 0);
+  assert.ok(after.reservedArtifactBytesHighWater <= after.artifactFootprintLimitBytes);
+
+  for (let index = 0; index < artifacts.length; index++) {
+    const result = results[index];
+    assert.ok(result);
+    const readBack = readCallArtifact(result.relPath);
+    assert.equal(readBack.state, "ready");
+    assert.equal(readBack.artifact?.schemaVersion, 11);
+    assert.deepEqual(
+      readBack.artifact?.pipeline?.streamChunks,
+      artifacts[index].pipeline?.streamChunks
+    );
+  }
+});
+
 test("call-log queue projection reduces duplicate footprint and preserves readback", async () => {
   const body = { messages: [{ role: "user", content: "context-".repeat(16_000) }] };
   const response = { choices: [{ message: { content: "answer-".repeat(2_000) } }] };
@@ -208,6 +255,37 @@ test("call-log queue projection reduces duplicate footprint and preserves readba
   assert.ok(result);
   assert.deepEqual(readCallArtifact(result.relPath), {
     artifact,
+    state: "ready",
+  });
+});
+
+test("async artifact writer preserves timestamped frame interning and restores consumers", async () => {
+  const frame = `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "shared".repeat(2_000) })}\n\n`;
+  const artifact = {
+    ...buildArtifact("worker-timestamped-stream-frames"),
+    schemaVersion: 10,
+    pipeline: {
+      streamChunks: {
+        provider: [`[12:00:00.001] ${frame}`],
+        openai: [`[12:00:00.002] ${frame}`],
+        client: [`[12:00:00.003] ${frame}`],
+      },
+    },
+  } as unknown as CallLogArtifact;
+
+  const projection = projectCallLogArtifactForQueue(artifact) as CallLogArtifact;
+  const encoded = projection.pipeline?.streamChunks as Record<string, unknown>;
+  assert.equal(encoded.encoding, "omni-stream-timestamped-frame-table/v1");
+  assert.deepEqual(encoded.dictionary, [frame]);
+  assert.ok(
+    estimateCallLogArtifactFootprint(projection).estimatedBytes <
+      estimateCallLogArtifactFootprint(artifact).estimatedBytes
+  );
+
+  const result = await writeCallArtifactAsync(artifact);
+  assert.ok(result);
+  assert.deepEqual(readCallArtifact(result.relPath), {
+    artifact: { ...artifact, schemaVersion: 11 },
     state: "ready",
   });
 });

@@ -230,6 +230,81 @@ test("repeated exact stream chunk text is stored once and expanded for log consu
   assert.ok(legacyBytes - sizeBytes > 16_000, "repeated chunk text should be stored once");
 });
 
+test("timestamped stream frames share exact payloads and restore each capture time", () => {
+  const frameText = `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "x".repeat(8_000) })}\n\n`;
+  const originalChunks = {
+    provider: [`[12:00:00.001] ${frameText}`, `[12:00:00.004] ${frameText}`],
+    openai: [`[12:00:00.002] ${frameText}`, `[12:00:00.005] ${frameText}`],
+    client: [`[12:00:00.003] ${frameText}`, `[12:00:00.006] ${frameText}`],
+  };
+  const input = artifact({ input: "request" }, { output: "response" });
+  Object.assign(input.pipeline, { streamChunks: originalChunks });
+
+  const { storedJson, artifact: roundTripped, sizeBytes } = writeAndRead(input);
+  const storedPipeline = storedJson.pipeline as Record<string, Record<string, unknown>>;
+  const encoded = storedPipeline.streamChunks;
+  assert.equal(storedJson.schemaVersion, 11);
+  assert.equal(encoded.encoding, "omni-stream-timestamped-frame-table/v1");
+  assert.deepEqual(encoded.dictionary, [frameText]);
+  assert.deepEqual(encoded.provider, [
+    ["12:00:00.001", 0],
+    ["12:00:00.004", 0],
+  ]);
+  assert.deepEqual(encoded.openai, [
+    ["12:00:00.002", 0],
+    ["12:00:00.005", 0],
+  ]);
+  assert.deepEqual(encoded.client, [
+    ["12:00:00.003", 0],
+    ["12:00:00.006", 0],
+  ]);
+  assert.deepEqual(roundTripped.pipeline?.streamChunks, originalChunks);
+
+  const originalBytes = Buffer.byteLength(JSON.stringify(input));
+  assert.ok(originalBytes - sizeBytes > 30_000, "timestamped repeats should use one frame copy");
+});
+
+test("timestamped frame interning stays off when frames are unique", () => {
+  const chunks = {
+    provider: [`[12:00:00.001] ${"provider".repeat(200)}`],
+    openai: [`[12:00:00.002] ${"openai".repeat(200)}`],
+    client: [`[12:00:00.003] ${"client".repeat(200)}`],
+  };
+  const input = artifact({ input: "request" }, { output: "response" });
+  Object.assign(input.pipeline, { streamChunks: chunks });
+
+  const { storedJson, artifact: roundTripped } = writeAndRead(input);
+  const storedPipeline = storedJson.pipeline as Record<string, unknown>;
+  assert.deepEqual(storedPipeline.streamChunks, chunks);
+  assert.deepEqual(roundTripped.pipeline?.streamChunks, chunks);
+});
+
+test("reader rejects malformed timestamped frame references", () => {
+  const frameText = 'data: {"type":"response.output_text.delta","delta":"x"}\n\n';
+  const input = artifact({ input: "request" }, { output: "response" });
+  Object.assign(input.pipeline, {
+    streamChunks: {
+      provider: [`[12:00:00.001] ${frameText}`],
+      openai: [`[12:00:00.002] ${frameText}`],
+      client: [`[12:00:00.003] ${frameText}`],
+    },
+  });
+  const relativePath = `payload-dedup/${input.summary.id}.json`;
+  const { storedJson } = writeAndRead(input);
+  const originalJson = JSON.stringify(storedJson);
+
+  for (const corrupt of ["timestamp", "index"] as const) {
+    const tampered = JSON.parse(originalJson) as Record<string, unknown>;
+    const pipeline = tampered.pipeline as Record<string, Record<string, unknown>>;
+    const table = pipeline.streamChunks as Record<string, unknown>;
+    const provider = table.provider as Array<[string, number]>;
+    if (corrupt === "timestamp") provider[0][0] = "not-a-timestamp";
+    else provider[0][1] = 1;
+    fs.writeFileSync(path.join(CALL_LOGS_DIR!, relativePath), JSON.stringify(tampered));
+    assert.equal(readCallArtifact(relativePath).state, "corrupt");
+  }
+});
+
 test("repeated long request and response text is stored once and expanded on read", () => {
   const repeatedText = `Shared system policy and tool instructions for this session. ${"Keep the result exact. ".repeat(1800)}`;
   const requestBody = {

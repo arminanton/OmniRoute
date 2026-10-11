@@ -63,7 +63,7 @@ function preserveErrorForSizeLimit(error: unknown): unknown {
 export type CallLogDetailState = "none" | "ready" | "missing" | "corrupt" | "legacy-inline";
 
 export type CallLogArtifact = {
-  schemaVersion: 5 | 6 | 7 | 8 | 9 | 10;
+  schemaVersion: 5 | 6 | 7 | 8 | 9 | 10 | 11;
   summary: {
     id: string;
     timestamp: string;
@@ -347,7 +347,9 @@ function compactErrorPipeline(artifact: CallLogArtifact): RequestPipelinePayload
     : [];
   const existingDropped = artifact.pipeline?.providerAttemptDiagnosticsDropped;
   const providerAttemptDiagnosticsDropped =
-    (typeof existingDropped === "number" && Number.isSafeInteger(existingDropped) && existingDropped > 0
+    (typeof existingDropped === "number" &&
+    Number.isSafeInteger(existingDropped) &&
+    existingDropped > 0
       ? existingDropped
       : 0) +
     (Array.isArray(rawAttemptDiagnostics)
@@ -358,9 +360,7 @@ function compactErrorPipeline(artifact: CallLogArtifact): RequestPipelinePayload
     ...(diagnosticOverflow ? { diagnosticOverflow } : {}),
     ...(providerResponse ? { providerResponse } : {}),
     ...(providerAttemptDiagnostics.length ? { providerAttemptDiagnostics } : {}),
-    ...(providerAttemptDiagnosticsDropped
-      ? { providerAttemptDiagnosticsDropped }
-      : {}),
+    ...(providerAttemptDiagnosticsDropped ? { providerAttemptDiagnosticsDropped } : {}),
     ...(transportTelemetry ? { transportTelemetry } : {}),
   };
 }
@@ -509,6 +509,8 @@ const CALL_LOG_REQUEST_BODY_REFERENCES = new Set([
 ]);
 
 const STREAM_CHUNK_TEXT_ENCODING = "omni-stream-chunk-text-table/v1";
+const STREAM_TIMESTAMPED_FRAME_ENCODING = "omni-stream-timestamped-frame-table/v1";
+const STREAM_CHUNK_TIMESTAMP_PREFIX = /^\[(\d{2}:\d{2}:\d{2}\.\d{3})\] ([\s\S]*)$/;
 const STREAM_CHUNK_CHANNELS = ["provider", "openai", "client"] as const;
 const STREAM_CHUNK_CHANNEL_SET = new Set<string>(STREAM_CHUNK_CHANNELS);
 const EXACT_TEXT_TABLE_ENCODING = "omni-exact-text-table/v1" as const;
@@ -545,15 +547,22 @@ function jsonObjectByteLength(entries: readonly (readonly [string, number])[]): 
 }
 
 /**
- * Persist repeated exact stream-frame text once per artifact. This only changes
- * the private on-disk representation; readCallArtifact expands it before any
- * API, UI, continuation, or export consumer sees the payload.
+ * Persist repeated stream-chunk text once per artifact. Exact chunks use integer
+ * references; timestamp-prefixed chunks can share the unchanged frame payload while
+ * retaining each capture time. This only changes the private on-disk representation;
+ * readCallArtifact expands both encodings before any consumer sees the payload.
  */
 export function compactCallLogStreamChunkText(artifact: CallLogArtifact): CallLogArtifact {
   const streamChunks = artifact.pipeline?.streamChunks as
     | (Record<string, unknown> & { provider?: unknown; openai?: unknown; client?: unknown })
     | undefined;
-  if (!streamChunks || streamChunks.encoding === STREAM_CHUNK_TEXT_ENCODING) return artifact;
+  if (
+    !streamChunks ||
+    streamChunks.encoding === STREAM_CHUNK_TEXT_ENCODING ||
+    streamChunks.encoding === STREAM_TIMESTAMPED_FRAME_ENCODING
+  ) {
+    return artifact;
+  }
   if (Object.keys(streamChunks).some((key) => !STREAM_CHUNK_CHANNEL_SET.has(key))) {
     return artifact;
   }
@@ -577,22 +586,10 @@ export function compactCallLogStreamChunkText(artifact: CallLogArtifact): CallLo
     }
   }
 
-  if (totalChunks < 2 || occurrences.size === totalChunks) return artifact;
+  if (totalChunks < 2) return artifact;
 
-  const dictionary = [...occurrences.keys()];
-  const indexes = new Map(dictionary.map((chunk, index) => [chunk, index]));
-  const encoded: Record<string, unknown> = {
-    encoding: STREAM_CHUNK_TEXT_ENCODING,
-    dictionary,
-  };
-  for (const channel of STREAM_CHUNK_CHANNELS) {
-    const chunks = channels[channel];
-    if (chunks !== undefined) encoded[channel] = chunks.map((chunk) => indexes.get(chunk)!);
-  }
-
-  // Avoid paying the table metadata cost when duplicates are too short to
-  // offset the integer references. Count JSON bytes directly so the hot path
-  // does not stringify two additional copies of the captured stream text.
+  // Avoid paying table metadata when integer references do not offset repeated text.
+  // Count JSON bytes directly instead of stringifying a second copy of the chunks.
   const rawBytes = jsonObjectByteLength(
     Object.entries(channels).map(
       ([channel, chunks]) =>
@@ -602,28 +599,123 @@ export function compactCallLogStreamChunkText(artifact: CallLogArtifact): CallLo
         ] as const
     )
   );
-  const encodedEntries: Array<readonly [string, number]> = [
-    ["encoding", jsonStringByteLength(STREAM_CHUNK_TEXT_ENCODING)],
-    ["dictionary", jsonArrayByteLength(dictionary.map((chunk) => serializedTextBytes.get(chunk)!))],
-  ];
-  for (const channel of STREAM_CHUNK_CHANNELS) {
-    const chunks = channels[channel];
-    if (chunks !== undefined) {
-      encodedEntries.push([
-        channel,
-        jsonArrayByteLength(chunks.map((chunk) => String(indexes.get(chunk)).length)),
-      ]);
+
+  let bestBytes = rawBytes;
+  let bestEncoding: "exact" | "timestamped" | null = null;
+  let bestStreamChunks: Record<string, unknown> | null = null;
+
+  if (occurrences.size < totalChunks) {
+    const dictionary = [...occurrences.keys()];
+    const indexes = new Map(dictionary.map((chunk, index) => [chunk, index]));
+    const encoded: Record<string, unknown> = {
+      encoding: STREAM_CHUNK_TEXT_ENCODING,
+      dictionary,
+    };
+    for (const channel of STREAM_CHUNK_CHANNELS) {
+      const chunks = channels[channel];
+      if (chunks !== undefined) encoded[channel] = chunks.map((chunk) => indexes.get(chunk)!);
+    }
+
+    const encodedEntries: Array<readonly [string, number]> = [
+      ["encoding", jsonStringByteLength(STREAM_CHUNK_TEXT_ENCODING)],
+      [
+        "dictionary",
+        jsonArrayByteLength(dictionary.map((chunk) => serializedTextBytes.get(chunk)!)),
+      ],
+    ];
+    for (const channel of STREAM_CHUNK_CHANNELS) {
+      const chunks = channels[channel];
+      if (chunks !== undefined) {
+        encodedEntries.push([
+          channel,
+          jsonArrayByteLength(chunks.map((chunk) => String(indexes.get(chunk)).length)),
+        ]);
+      }
+    }
+    const encodedBytes = jsonObjectByteLength(encodedEntries);
+    if (encodedBytes < bestBytes) {
+      bestBytes = encodedBytes;
+      bestEncoding = "exact";
+      bestStreamChunks = encoded;
     }
   }
-  const encodedBytes = jsonObjectByteLength(encodedEntries);
-  if (encodedBytes >= rawBytes) return artifact;
 
+  // Release the exact-chunk lookup tables before building the alternate frame-payload table.
+  // The source chunk arrays remain the canonical data, so this avoids holding both maps live.
+  occurrences.clear();
+  serializedTextBytes.clear();
+
+  const timestampedChannels: Partial<
+    Record<(typeof STREAM_CHUNK_CHANNELS)[number], Array<[string, number]>>
+  > = {};
+  const frameDictionary: string[] = [];
+  const frameIndexes = new Map<string, number>();
+  const serializedFrameBytes = new Map<string, number>();
+  const pairJsonBytes: Partial<Record<(typeof STREAM_CHUNK_CHANNELS)[number], number[]>> = {};
+  let timestamped = true;
+
+  for (const channel of STREAM_CHUNK_CHANNELS) {
+    const chunks = channels[channel];
+    if (chunks === undefined) continue;
+    timestampedChannels[channel] = [];
+    pairJsonBytes[channel] = [];
+    for (const chunk of chunks) {
+      const match = STREAM_CHUNK_TIMESTAMP_PREFIX.exec(chunk);
+      if (!match) {
+        timestamped = false;
+        break;
+      }
+      const [, timestamp, frameText] = match;
+      let index = frameIndexes.get(frameText);
+      if (index === undefined) {
+        index = frameDictionary.length;
+        frameIndexes.set(frameText, index);
+        frameDictionary.push(frameText);
+        serializedFrameBytes.set(frameText, jsonStringByteLength(frameText));
+      }
+      timestampedChannels[channel]!.push([timestamp, index]);
+      pairJsonBytes[channel]!.push(2 + jsonStringByteLength(timestamp) + 1 + String(index).length);
+    }
+    if (!timestamped) break;
+  }
+
+  if (timestamped && frameIndexes.size < totalChunks) {
+    const encodedTimestamped: Record<string, unknown> = {
+      encoding: STREAM_TIMESTAMPED_FRAME_ENCODING,
+      dictionary: frameDictionary,
+      ...timestampedChannels,
+    };
+    const encodedEntries: Array<readonly [string, number]> = [
+      ["encoding", jsonStringByteLength(STREAM_TIMESTAMPED_FRAME_ENCODING)],
+      [
+        "dictionary",
+        jsonArrayByteLength(frameDictionary.map((frame) => serializedFrameBytes.get(frame)!)),
+      ],
+    ];
+    for (const channel of STREAM_CHUNK_CHANNELS) {
+      const pairSizes = pairJsonBytes[channel];
+      if (pairSizes !== undefined) {
+        encodedEntries.push([channel, jsonArrayByteLength(pairSizes)]);
+      }
+    }
+    const encodedBytes = jsonObjectByteLength(encodedEntries);
+    if (encodedBytes < bestBytes) {
+      bestBytes = encodedBytes;
+      bestEncoding = "timestamped";
+      bestStreamChunks = encodedTimestamped;
+    }
+  }
+
+  if (!bestEncoding || !bestStreamChunks) return artifact;
   return {
     ...artifact,
-    schemaVersion: Math.max(artifact.schemaVersion, 8) as CallLogArtifact["schemaVersion"],
+    schemaVersion:
+      bestEncoding === "timestamped"
+        ? (Math.max(artifact.schemaVersion, 11) as CallLogArtifact["schemaVersion"])
+        : (Math.max(artifact.schemaVersion, 8) as CallLogArtifact["schemaVersion"]),
     pipeline: {
       ...artifact.pipeline,
-      streamChunks: encoded as unknown as RequestPipelinePayloads["streamChunks"],
+      streamChunks: bestStreamChunks as unknown as RequestPipelinePayloads["streamChunks"],
     },
   };
 }
@@ -996,12 +1088,53 @@ function expandCallLogStreamChunkText(artifact: CallLogArtifact): CallLogArtifac
   const streamChunks = artifact.pipeline?.streamChunks as
     | (Record<string, unknown> & { provider?: unknown; openai?: unknown; client?: unknown })
     | undefined;
-  if (!streamChunks || streamChunks.encoding !== STREAM_CHUNK_TEXT_ENCODING) return artifact;
+  if (!streamChunks) return artifact;
 
   const dictionary = streamChunks.dictionary;
   if (!Array.isArray(dictionary) || dictionary.some((chunk) => typeof chunk !== "string")) {
-    throw new Error("Invalid call-log stream chunk dictionary");
+    if (
+      streamChunks.encoding === STREAM_CHUNK_TEXT_ENCODING ||
+      streamChunks.encoding === STREAM_TIMESTAMPED_FRAME_ENCODING
+    ) {
+      throw new Error("Invalid call-log stream chunk dictionary");
+    }
+    return artifact;
   }
+
+  if (streamChunks.encoding === STREAM_TIMESTAMPED_FRAME_ENCODING) {
+    const expanded: Record<string, string[]> = {};
+    for (const channel of STREAM_CHUNK_CHANNELS) {
+      const references = streamChunks[channel];
+      if (references === undefined) continue;
+      if (!Array.isArray(references)) {
+        throw new Error("Invalid call-log timestamped stream chunk references");
+      }
+      expanded[channel] = references.map((reference) => {
+        if (!Array.isArray(reference) || reference.length !== 2) {
+          throw new Error("Invalid call-log timestamped stream chunk reference");
+        }
+        const [timestamp, index] = reference;
+        if (
+          typeof timestamp !== "string" ||
+          !/^\d{2}:\d{2}:\d{2}\.\d{3}$/.test(timestamp) ||
+          !Number.isSafeInteger(index) ||
+          Number(index) < 0 ||
+          Number(index) >= dictionary.length
+        ) {
+          throw new Error("Invalid call-log timestamped stream chunk reference");
+        }
+        return `[${timestamp}] ${dictionary[Number(index)] as string}`;
+      });
+    }
+
+    artifact.pipeline = {
+      ...artifact.pipeline,
+      streamChunks: expanded as RequestPipelinePayloads["streamChunks"],
+    };
+    return artifact;
+  }
+
+  if (streamChunks.encoding !== STREAM_CHUNK_TEXT_ENCODING) return artifact;
   const expanded: Record<string, string[]> = {};
   for (const channel of STREAM_CHUNK_CHANNELS) {
     const references = streamChunks[channel];
