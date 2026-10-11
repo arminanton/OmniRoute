@@ -350,6 +350,56 @@ test("version-manager operations describe validation, service, auth, and body-li
   }
 });
 
+test("settings revisions and usage endpoints document handler error variants", () => {
+  assertResponse("/api/settings", "get", "500", "StringErrorResponse");
+  for (const method of ["patch", "put"]) {
+    const op = operation("/api/settings", method);
+    assert.deepEqual(
+      operation("/api/settings", method).responses["400"]?.content?.[
+        "application/json"
+      ]?.schema?.oneOf?.map((branch: Record<string, string>) => branch.$ref),
+      ["#/components/schemas/ApiErrorResponse", "#/components/schemas/StringErrorResponse"]
+    );
+    assertResponse("/api/settings", method, "409", "ApiErrorResponse");
+    assert.equal(op.responses["409"].headers.ETag.schema.type, "string");
+    assert.equal(op.responses["409"].headers["Cache-Control"].schema.const, "no-store");
+    assertResponse("/api/settings", method, "413", "ApiErrorResponse");
+    assertResponse("/api/settings", method, "500", "StringErrorResponse");
+  }
+
+  assertResponse("/api/settings/authz-inventory", "get", "500", "StringErrorResponse");
+  assertResponse("/api/usage/budget", "get", "500", "StringErrorResponse");
+  assertResponse("/api/usage/budget", "post", "413", "ApiErrorResponse");
+  assertResponse("/api/usage/budget", "post", "500", "StringErrorResponse");
+  assertResponse("/api/usage/history", "get", "500", "StringErrorResponse");
+});
+
+test("final literal route errors and shared body-limit responses have source-backed schemas", () => {
+  assertResponse("/api/playground/presets", "get", "400", "DirectValidationErrorResponse");
+  assertResponse("/api/provider-metrics", "get", "500", "ApiErrorResponse");
+  assertResponse("/api/provider-stats", "get", "500", "StringErrorResponse");
+  assertResponse(
+    "/api/v1/management/proxy-subscriptions/{id}",
+    "patch",
+    "400",
+    "StringErrorResponse"
+  );
+  for (const method of ["get", "patch", "delete"]) {
+    assertResponse(
+      "/api/v1/management/proxy-subscriptions/{id}",
+      method,
+      "404",
+      "StringErrorResponse"
+    );
+  }
+  assertResponse("/api/v1/management/proxy-subscriptions/{id}", "patch", "413", "ApiErrorResponse");
+  assertResponse("/api/v1/search", "get", "500", "ApiErrorResponse");
+  assertResponse("/api/v1/vscode/combos/{token}", "post", "400", "StringErrorResponse");
+  assertResponse("/api/v1/vscode/combos/{token}", "post", "413", "ApiErrorResponse");
+  assertResponse("/api/v1beta/models/{path}", "post", "413", "ApiErrorResponse");
+  assertResponse("/api/v1beta/models/{path}", "post", "500", "ApiErrorResponse");
+});
+
 test("service manager endpoints document validation, body-size, and upstream failures", () => {
   const cases: Array<[string, string, string, string]> = [
     ["/api/services/9router/auto-start", "post", "400", "ApiErrorResponse"],
