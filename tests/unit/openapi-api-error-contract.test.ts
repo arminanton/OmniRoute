@@ -349,3 +349,29 @@ test("version-manager operations describe validation, service, auth, and body-li
     assert.equal(responses["503"]?.$ref, "#/components/responses/ManagementAuthUnavailable");
   }
 });
+
+test("service manager endpoints document validation, body-size, and upstream failures", () => {
+  const cases: Array<[string, string, string, string]> = [
+    ["/api/services/9router/auto-start", "post", "400", "ApiErrorResponse"],
+    ["/api/services/9router/auto-start", "post", "413", "ApiErrorResponse"],
+    ["/api/services/9router/auto-start", "post", "500", "ApiErrorResponse"],
+    ["/api/services/9router/models", "get", "500", "ApiErrorResponse"],
+    ["/api/services/9router/provider-expose", "post", "400", "ApiErrorResponse"],
+    ["/api/services/9router/provider-expose", "post", "413", "ApiErrorResponse"],
+    ["/api/services/9router/provider-expose", "post", "500", "ApiErrorResponse"],
+    ["/api/services/cliproxy/auto-start", "post", "400", "ApiErrorResponse"],
+    ["/api/services/cliproxy/auto-start", "post", "413", "ApiErrorResponse"],
+    ["/api/services/cliproxy/auto-start", "post", "500", "ApiErrorResponse"],
+    ["/api/services/cliproxy/provider-expose", "post", "400", "ApiErrorResponse"],
+    ["/api/services/cliproxy/provider-expose", "post", "413", "ApiErrorResponse"],
+    ["/api/services/cliproxy/provider-expose", "post", "500", "ApiErrorResponse"],
+    ["/api/services/dario/admin/import-from-omniroute", "get", "500", "ApiErrorResponse"],
+    ["/api/services/dario/admin/import-from-omniroute", "post", "400", "ApiErrorResponse"],
+    ["/api/services/dario/admin/import-from-omniroute", "post", "413", "ApiErrorResponse"],
+    ["/api/services/dario/admin/import-from-omniroute", "post", "404", "ApiErrorResponse"],
+    ["/api/services/dario/admin/import-from-omniroute", "post", "500", "ApiErrorResponse"],
+  ];
+  for (const [route, method, status, schema] of cases) {
+    assertResponse(route, method, status, schema);
+  }
+});

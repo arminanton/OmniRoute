@@ -10672,8 +10672,10 @@ paths:
         "204":
           description: Auto-start flag updated; no response body.
         "400":
-          description: Invalid request body
-        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+          description: The auto-start request body is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "403":
           description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
           content:
@@ -10681,6 +10683,16 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Auto-starting 9Router failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/services/9router/auto-restart-adopted:
     post:
       operationId: postApiServices9routerAutoRestartAdopted
@@ -11027,8 +11039,10 @@ paths:
         "204":
           description: Auto-start flag updated; no response body.
         "400":
-          description: Invalid request body
-        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+          description: The auto-start request body is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "403":
           description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
           content:
@@ -11036,6 +11050,16 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Auto-starting CLIProxyAPI failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/services/cliproxy/auto-restart-adopted:
     post:
       operationId: postApiServicesCliproxyAutoRestartAdopted
@@ -12526,6 +12550,11 @@ paths:
           x-sensitive: true
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "500":
+          description: Listing eligible OmniRoute connections for import failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiServicesDarioAdminImportFromOmniroute
       x-local-only: true
@@ -12584,14 +12613,27 @@ paths:
                     type: [string, "null"]
           x-sensitive: true
         "400":
-          description: Invalid request body, unsupported connection, or missing tokens
+          description: The import request body is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "404":
-          description: Connection not found
+          description: The requested OmniRoute connection was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
-          description: Import failed
-
+          description: Importing the OmniRoute connection into Dario failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/services/{name}/logs:
     get:
       operationId: getApiServicesByNameLogs
@@ -34375,6 +34417,11 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
+        "500":
+          description: Listing 9Router models failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/services/9router/provider-expose:
     post:
       operationId: postApiServices9routerProviderExpose
@@ -34408,6 +34455,21 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
+        "400":
+          description: The provider-expose request is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Exposing a provider to 9Router failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/services/cliproxy/accounts:
     get:
       operationId: getApiServicesCliproxyAccounts
@@ -34484,6 +34546,21 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
+        "400":
+          description: The provider-expose request is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Exposing a provider to CLIProxyAPI failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/session-pools:
     get:
       operationId: getApiSessionPools
