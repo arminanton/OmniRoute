@@ -45731,6 +45731,8 @@ paths:
                 $ref: "#/components/schemas/VscodeModelListResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ApiErrorResponse"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/combos/{token}:
@@ -47241,6 +47243,8 @@ paths:
                 $ref: "#/components/schemas/VscodeRawModelListResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ApiErrorResponse"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/web/fetch:
