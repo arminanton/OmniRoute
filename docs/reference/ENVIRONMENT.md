@@ -1683,3 +1683,18 @@ These controls are set by the reviewed deployment controller. Shared admission i
 | `OMNIROUTE_APP_GENERATION` | _(unset)_ | `src/lib/canaryReadiness.ts` | Controller-owned generation identity used for readiness and generation-bound reversible drain. |
 | `OMNI_LOGICAL_RETRY_MAX_ATTEMPTS` | `12` | `open-sse/services/logicalRetryBudget.ts` | Positive integer cap shared across physical generation sends for a logical request. |
 | `OMNI_LOGICAL_RETRY_DEADLINE_MS` | `900000` | `open-sse/services/logicalRetryBudget.ts` | Positive retry/admission deadline from logical request start. It limits new sends/backoff, not an already streaming response's lifetime. |
+
+## Private diagnostic overflow capture
+
+`OMNI_DIAGNOSTIC_OVERFLOW_ENABLED` defaults to `false`. Enabling it permits eligible detailed diagnostic producers to store private payload gzip files separately from the capped call-log artifact. A `noLog` request remains ineligible. The proposed initial producer is Antigravity; changing this environment flag does not activate a provider, routing policy, or transport.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OMNI_DIAGNOSTIC_OVERFLOW_ENABLED` | `false` | Opt in to private overflow capture. |
+| `OMNI_DIAGNOSTIC_OVERFLOW_FILE_BYTES` | `67108864` | Maximum raw/decoded bytes per payload file, 64 MiB. |
+| `OMNI_DIAGNOSTIC_OVERFLOW_TOTAL_BYTES` | `2147483648` | Aggregate budget, 2 GiB, enforced through atomic SQLite reservations including conservative metadata/compression overhead and database allocation. |
+| `OMNI_DIAGNOSTIC_OVERFLOW_RETENTION_MS` | `604800000` | Seven-day retention of owned sealed records. Cleanup runs on capture creation or an explicit maintenance invocation; it never evicts a live leased writer. |
+
+Files are under `DATA_DIR/diagnostic_overflow`, with owner-only `0700` directories and `0600` payload/database files. Raw bodies intentionally contain the approved request/response contents; headers retain only bounded safe metadata. Provider-request files contain the exact serialized outbound body; provider-response files contain bytes consumed by the single decoded upstream reader. Client-request files are labelled `parsed_json_reserialized_utf8`, since they preserve the approved parsed-body serialization rather than original HTTP wire formatting.
+
+A complete capture requires EOF, gzip finalization, file/directory sync and durable SQLite manifest state. Per-file or aggregate limits, aborts, filesystem errors and lost leases are explicitly incomplete, with no automatic replay or silent eviction. A budget rejected before a trace can be persisted produces an incomplete reference with `persisted:false`; it does not invent a downloadable file. SHA-256, raw/compressed byte counts and bounded status/request IDs accompany sealed files. Authenticated readers reject unsafe paths, symlinks, permissions and compressed-hash mismatches. This is diagnostic capture, not a guarantee that every request can be retained within a finite disk budget.
