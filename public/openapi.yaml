@@ -26833,7 +26833,15 @@ paths:
                   - { $ref: "#/components/schemas/StringErrorResponse" }
                   - { $ref: "#/components/schemas/ValidationErrorResponse" }
                   - { $ref: "#/components/schemas/IssueAgentUnsupportedModeResponse" }
-        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+                  - { $ref: "#/components/schemas/IssueAgentModelRunResponse" }
+        "401":
+          description: Management authentication failed, or the delegated chat completion returned HTTP 401 after a run was recorded.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/IssueAgentModelRunResponse" }
         "403":
           description: Remote peer rejected by LOCAL_ONLY policy, feature disabled, or management credentials invalid.
           content:
@@ -26842,12 +26850,41 @@ paths:
                 oneOf:
                   - { $ref: "#/components/schemas/ApiErrorResponse" }
                   - { $ref: "#/components/schemas/IssueAgentDisabledResponse" }
+                  - { $ref: "#/components/schemas/IssueAgentModelRunResponse" }
         "504":
-          description: Recorded triage execution exceeded its configured timeout.
+          description: Recorded triage execution timed out, or the delegated chat completion returned HTTP 504 after a run was recorded.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/IssueAgentTimeoutResponse" }
-        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/IssueAgentTimeoutResponse" }
+                  - { $ref: "#/components/schemas/IssueAgentModelRunResponse" }
+        "503":
+          description: Management authentication is unavailable, or the delegated chat completion returned HTTP 503 after a run was recorded.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/IssueAgentModelRunResponse" }
+        "2XX":
+          description: The delegated chat completion returned a non-200 success status after a run was recorded.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IssueAgentModelRunResponse" }
+        "4XX":
+          description: The delegated chat completion returned a client error after a run was recorded.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IssueAgentModelRunResponse" }
+        "5XX":
+          description: The delegated chat completion returned a server error after a run was recorded.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IssueAgentModelRunResponse" }
   /api/keys/{id}/regenerate:
     parameters:
       - name: id

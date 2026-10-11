@@ -485,6 +485,21 @@ test("delegated and classified dynamic statuses have schemas for every documente
   );
   assertResponse("/api/version-manager/install", "post", "504", "StringErrorResponse");
   assertResponse("/api/version-manager/install", "post", "507", "StringErrorResponse");
+
+  const issueAgent = operation("/api/issue-agent/runs", "post");
+  for (const status of ["2XX", "4XX", "5XX"]) {
+    assertResponse("/api/issue-agent/runs", "post", status, "IssueAgentModelRunResponse");
+  }
+  for (const status of ["400", "401", "403", "503", "504"]) {
+    assert.ok(issueAgent.responses[status], `POST /api/issue-agent/runs ${status}`);
+    assert.ok(
+      issueAgent.responses[status].content["application/json"].schema.oneOf.some(
+        (branch: Record<string, string>) =>
+          branch.$ref === "#/components/schemas/IssueAgentModelRunResponse"
+      ),
+      `${status} also represents a forwarded model-run status after recording the run`
+    );
+  }
 });
 
 test("service manager endpoints document validation, body-size, and upstream failures", () => {
