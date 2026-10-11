@@ -2530,6 +2530,11 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/StringErrorResponse"
                   - $ref: "#/components/schemas/ValidationErrorResponse"
+        "410":
+          description: The requested provider or model is retired and unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/v1/responses:
     post:

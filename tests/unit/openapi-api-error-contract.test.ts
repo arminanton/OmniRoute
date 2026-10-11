@@ -427,6 +427,7 @@ test("final literal route errors and shared body-limit responses have source-bac
 test("delegated and classified dynamic statuses have schemas for every documented outcome", () => {
   assertResponse("/api/v1/search", "get", "4XX", "ApiErrorResponse");
   assertResponse("/api/v1/search", "get", "5XX", "ApiErrorResponse");
+  assertResponse("/api/v1/messages/count_tokens", "post", "410", "ApiErrorResponse");
   assertResponse("/api/oauth/kiro/api-key", "post", "500", "StringErrorResponse");
   const kiroSocial = operation("/api/oauth/kiro/social-exchange", "post");
   for (const status of ["400", "500", "503"]) {
