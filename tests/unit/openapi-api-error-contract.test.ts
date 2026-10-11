@@ -260,7 +260,12 @@ test("skill endpoints describe validation, auth, installation, and upstream mark
   for (const [route, method] of managementRoutes) {
     const responses = operation(route, method).responses;
     assert.equal(responses["401"]?.$ref, "#/components/responses/ManagementAuthenticationRequired");
-    assert.equal(responses["403"]?.$ref, "#/components/responses/ManagementInvalidToken");
+    assert.ok(
+      [
+        "#/components/responses/ManagementInvalidToken",
+        "#/components/responses/ManagementOrRuntimePolicyForbidden",
+      ].includes(responses["403"]?.$ref)
+    );
     assert.equal(responses["503"]?.$ref, "#/components/responses/ManagementAuthUnavailable");
   }
 });
@@ -309,7 +314,12 @@ test("plugin management routes document validation, not-found, body-limit, and a
   for (const [route, method] of managementOperations) {
     const responses = operation(route, method).responses;
     assert.equal(responses["401"]?.$ref, "#/components/responses/ManagementAuthenticationRequired");
-    assert.equal(responses["403"]?.$ref, "#/components/responses/ManagementInvalidToken");
+    assert.ok(
+      [
+        "#/components/responses/ManagementInvalidToken",
+        "#/components/responses/ManagementOrRuntimePolicyForbidden",
+      ].includes(responses["403"]?.$ref)
+    );
     assert.equal(responses["503"]?.$ref, "#/components/responses/ManagementAuthUnavailable");
   }
 });
@@ -345,8 +355,22 @@ test("version-manager operations describe validation, service, auth, and body-li
   for (const [route, method] of managementOperations) {
     const responses = operation(route, method).responses;
     assert.equal(responses["401"]?.$ref, "#/components/responses/ManagementAuthenticationRequired");
-    assert.equal(responses["403"]?.$ref, "#/components/responses/ManagementInvalidToken");
-    assert.equal(responses["503"]?.$ref, "#/components/responses/ManagementAuthUnavailable");
+    assert.ok(
+      [
+        "#/components/responses/ManagementInvalidToken",
+        "#/components/responses/ManagementOrRuntimePolicyForbidden",
+      ].includes(responses["403"]?.$ref)
+    );
+    if (route === "/api/version-manager/install") {
+      assert.deepEqual(
+        responses["503"]?.content?.["application/json"]?.schema?.oneOf?.map(
+          (branch: Record<string, string>) => branch.$ref
+        ),
+        ["#/components/schemas/ApiErrorResponse", "#/components/schemas/StringErrorResponse"]
+      );
+    } else {
+      assert.equal(responses["503"]?.$ref, "#/components/responses/ManagementAuthUnavailable");
+    }
   }
 });
 
@@ -398,6 +422,69 @@ test("final literal route errors and shared body-limit responses have source-bac
   assertResponse("/api/v1/vscode/combos/{token}", "post", "413", "ApiErrorResponse");
   assertResponse("/api/v1beta/models/{path}", "post", "413", "ApiErrorResponse");
   assertResponse("/api/v1beta/models/{path}", "post", "500", "ApiErrorResponse");
+});
+
+test("delegated and classified dynamic statuses have schemas for every documented outcome", () => {
+  assertResponse("/api/v1/search", "get", "4XX", "ApiErrorResponse");
+  assertResponse("/api/v1/search", "get", "5XX", "ApiErrorResponse");
+  assertResponse("/api/oauth/kiro/api-key", "post", "500", "StringErrorResponse");
+  const kiroSocial = operation("/api/oauth/kiro/social-exchange", "post");
+  for (const status of ["400", "500", "503"]) {
+    assert.deepEqual(
+      kiroSocial.responses[status].content["application/json"].schema.oneOf.map(
+        (branch: Record<string, string>) => branch.$ref
+      ),
+      status === "400"
+        ? [
+            "#/components/schemas/ApiErrorResponse",
+            "#/components/schemas/KiroSocialExchangeFailureResponse",
+          ]
+        : status === "500"
+          ? [
+              "#/components/schemas/StringErrorResponse",
+              "#/components/schemas/KiroSocialExchangeFailureResponse",
+            ]
+          : [
+              "#/components/schemas/ApiErrorResponse",
+              "#/components/schemas/KiroSocialExchangeFailureResponse",
+            ]
+    );
+  }
+  assertResponse(
+    "/api/oauth/kiro/social-exchange",
+    "post",
+    "4XX",
+    "KiroSocialExchangeFailureResponse"
+  );
+  assertResponse(
+    "/api/oauth/kiro/social-exchange",
+    "post",
+    "5XX",
+    "KiroSocialExchangeFailureResponse"
+  );
+  assertResponse("/api/providers/{id}/models", "get", "4XX", "ProviderConnectionErrorResponse");
+  assertResponse("/api/providers/{id}/models", "get", "5XX", "ProviderConnectionErrorResponse");
+  for (const [route, method] of [
+    ["/api/v1/vscode/{token}/api/show", "post"],
+    ["/api/v1/vscode/raw/{token}/api/show", "post"],
+    ["/api/v1/vscode/{token}/api/tags", "get"],
+    ["/api/v1/vscode/raw/{token}/api/tags", "get"],
+    ["/api/v1/vscode/raw/{token}/models", "get"],
+    ["/api/v1/vscode/combos/{token}", "post"],
+  ]) {
+    assertResponse(route, method, "500", "ApiErrorResponse");
+  }
+
+  const installer = operation("/api/version-manager/install", "post").responses;
+  assert.equal(installer["403"]?.$ref, "#/components/responses/ManagementOrRuntimePolicyForbidden");
+  assert.deepEqual(
+    installer["503"]?.content?.["application/json"]?.schema?.oneOf?.map(
+      (branch: Record<string, string>) => branch.$ref
+    ),
+    ["#/components/schemas/ApiErrorResponse", "#/components/schemas/StringErrorResponse"]
+  );
+  assertResponse("/api/version-manager/install", "post", "504", "StringErrorResponse");
+  assertResponse("/api/version-manager/install", "post", "507", "StringErrorResponse");
 });
 
 test("service manager endpoints document validation, body-size, and upstream failures", () => {

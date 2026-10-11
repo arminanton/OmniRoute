@@ -1935,6 +1935,16 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "4XX":
+          description: Search provider returned a client error or the client request was aborted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "5XX":
+          description: Search provider or internal search processing failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiV1Search
       tags: [Search]
@@ -4317,6 +4327,16 @@ paths:
                   - $ref: "#/components/schemas/ProviderConnectionModelDiscoveryResponse"
                   - $ref: "#/components/schemas/ProviderConnectionErrorResponse"
 
+        "4XX":
+          description: Provider discovery returned a client error that was not otherwise enumerated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderConnectionErrorResponse" }
+        "5XX":
+          description: Provider discovery returned a server error that was not otherwise enumerated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderConnectionErrorResponse" }
   /api/providers/cursor/agent-availability:
     get:
       operationId: getApiProvidersCursorAgentAvailability
@@ -13337,22 +13357,43 @@ paths:
                           provider: { type: string, enum: [kiro, amazon-q] }
                           email: { type: [string, "null"] }
         "400":
-          description: Invalid JSON or missing/invalid device code fields.
+          description: Invalid JSON, invalid fields, or a provider poll returned a client error.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/KiroSocialExchangeFailureResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
           $ref: "#/components/responses/ManagementInvalidToken"
         "500":
-          description: Token exchange or connection persistence failed.
+          description: Kiro device polling returned a server error or local token persistence failed.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/KiroSocialExchangeFailureResponse" }
         "503":
-          $ref: "#/components/responses/ManagementAuthUnavailable"
-
+          description: Management authentication is unavailable or Kiro returned a service error during device-code polling.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/KiroSocialExchangeFailureResponse" }
+        "4XX":
+          description: Kiro returned a client error during device-code polling.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KiroSocialExchangeFailureResponse" }
+        "5XX":
+          description: Kiro returned a server error during device-code polling.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KiroSocialExchangeFailureResponse" }
   # ─── Cloud ─────────────────────────────────────────────────────
 
   /api/cloud/auth:
@@ -29551,6 +29592,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Kiro API-key import failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/oauth/trae/import:
     get:
       operationId: getApiOauthTraeImport
@@ -45251,6 +45297,11 @@ paths:
                 $ref: "#/components/schemas/StringErrorResponse"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          description: The delegated model-catalog operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/vscode/{token}/api/tags:
     parameters:
       - name: token
@@ -45286,6 +45337,11 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          description: The delegated model-catalog operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/vscode/{token}/api/version:
     parameters:
       - name: token
@@ -45724,6 +45780,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The delegated model-catalog operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/vscode/combos/{token}/{slug}:
     parameters:
       - name: token
@@ -45993,6 +46054,11 @@ paths:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          description: The delegated model-catalog operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/vscode/raw/{token}/api/tags:
     parameters:
       - name: token
@@ -46027,6 +46093,11 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          description: The delegated model-catalog operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/vscode/raw/{token}/api/version:
     parameters:
       - name: token
@@ -46214,6 +46285,11 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          description: The delegated model-catalog operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/a2a/tasks/history:
     get:
       operationId: getApiA2aTasksHistory
@@ -47270,9 +47346,25 @@ paths:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
         "503":
-          $ref: "#/components/responses/ManagementAuthUnavailable"
+          description: Management authentication is unavailable or the installer could not reach the release service.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "504":
+          description: The CLIProxyAPI installer exceeded its time limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "507":
+          description: The CLIProxyAPI installer ran out of disk space.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/version-manager/restart:
     post:
       operationId: postApiVersionManagerRestart
@@ -70829,6 +70921,14 @@ components:
         status: { type: string }
         found: { type: boolean }
       additionalProperties: true
+    KiroSocialExchangeFailureResponse:
+      type: object
+      required: [success, pending, error]
+      properties:
+        success: { type: boolean, const: false }
+        pending: { type: boolean, const: false }
+        error: { type: string }
+      additionalProperties: false
 
     CliProxyOAuthImportPreviewAccount:
       type: object
