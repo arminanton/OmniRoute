@@ -17,6 +17,7 @@ const {
   projectCallLogArtifactForQueue,
   reserveCallLogArtifactPreparation,
   releaseCallLogArtifactPreparation,
+  resolveCallLogArtifactFootprintLimit,
   writeDiagnosticOverflowStubAsync,
 } = await import("../../src/lib/usage/callLogArtifactWriter.ts");
 const { readCallArtifact } = await import("../../src/lib/usage/callLogArtifacts.ts");
@@ -24,6 +25,17 @@ const { readCallArtifact } = await import("../../src/lib/usage/callLogArtifacts.
 test.after(async () => {
   await closeCallLogArtifactWriter();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+});
+
+test("artifact footprint budget is configurable but stays positively bounded", () => {
+  const env = {} as NodeJS.ProcessEnv;
+  assert.equal(resolveCallLogArtifactFootprintLimit(env), 128 * 1024 * 1024);
+  env.OMNIROUTE_CALL_LOG_ARTIFACT_FOOTPRINT_LIMIT_BYTES = String(256 * 1024 * 1024);
+  assert.equal(resolveCallLogArtifactFootprintLimit(env), 256 * 1024 * 1024);
+  env.OMNIROUTE_CALL_LOG_ARTIFACT_FOOTPRINT_LIMIT_BYTES = String(1024 * 1024 * 1024);
+  assert.equal(resolveCallLogArtifactFootprintLimit(env), 512 * 1024 * 1024);
+  env.OMNIROUTE_CALL_LOG_ARTIFACT_FOOTPRINT_LIMIT_BYTES = "invalid";
+  assert.equal(resolveCallLogArtifactFootprintLimit(env), 128 * 1024 * 1024);
 });
 
 function buildArtifact(id: string): CallLogArtifact {
@@ -293,7 +305,8 @@ test("async artifact writer preserves timestamped frame interning and restores c
 test("artifact footprint estimate bounds large strings, tool arrays, and sparse arrays", () => {
   const text = estimateCallLogArtifactFootprint({ content: "x".repeat(1_000_000) });
   assert.equal(text.reason, undefined);
-  assert.ok(text.estimatedBytes >= 10_000_000);
+  assert.ok(text.estimatedBytes >= 5_000_000);
+  assert.ok(text.estimatedBytes < 6_000_000);
 
   const tools = estimateCallLogArtifactFootprint({
     tool_calls: Array.from({ length: 48 }, (_, index) => ({
@@ -337,7 +350,7 @@ test("artifact footprint estimation rejects accessors without invoking them", ()
 });
 
 test("artifact preparation refusal logs a bounded reason and never the payload", () => {
-  const secretLike = `private-body-marker-${"x".repeat(7 * 1024 * 1024)}`;
+  const secretLike = `private-body-marker-${"x".repeat(18 * 1024 * 1024)}`;
   const before = getCallLogArtifactWriterSnapshot();
   const warnings: string[] = [];
   const originalWarn = console.warn;
@@ -422,11 +435,11 @@ test("preparation reservation counts exact shared stage bodies once", () => {
 });
 
 test("high-context Antigravity stage bodies use exact shared and aggregate reservations", () => {
-  const contextBytes = 700_000;
+  const contextBytes = 1_000_000;
   const messages = Array.from({ length: 5 }, (_, index) => ({
     role: "user",
-    // 525,000 bytes encode to exactly 700,000 base64url characters.
-    content: Buffer.alloc(525_000, 65 + index).toString("base64url"),
+    // 750,000 bytes encode to exactly 1,000,000 base64url characters.
+    content: Buffer.alloc(750_000, 65 + index).toString("base64url"),
   }));
   assert.ok(messages.every((message) => message.content.length === contextBytes));
 
@@ -497,26 +510,34 @@ test("high-context Antigravity stage bodies use exact shared and aggregate reser
   const sharedReservation = reserveCallLogArtifactPreparation(sharedPayload);
   assert.ok(sharedReservation);
   assert.equal(sharedReservation.estimatedBytes, expectedSharedReservation);
-  assert.ok(sharedReservation.estimatedBytes > 64 * 1024 * 1024);
+  assert.ok(sharedReservation.estimatedBytes > 40 * 1024 * 1024);
   assert.ok(sharedReservation.estimatedBytes < before.artifactFootprintLimitBytes);
   assert.equal(
     getCallLogArtifactWriterSnapshot().reservedArtifactBytes,
     before.reservedArtifactBytes + expectedSharedReservation
   );
 
+  let secondSharedReservation: ReturnType<typeof reserveCallLogArtifactPreparation> = null;
   try {
     assert.ok(
       before.reservedArtifactBytes + expectedSharedReservation <= before.artifactFootprintLimitBytes
     );
     assert.ok(
-      before.reservedArtifactBytes + expectedSharedReservation * 2 >
+      before.reservedArtifactBytes + expectedSharedReservation * 2 <=
         before.artifactFootprintLimitBytes,
-      "two high-context reservations must exceed the process-wide cap"
+      "two shared high-context reservations must fit under the process-wide cap"
+    );
+    secondSharedReservation = reserveCallLogArtifactPreparation(sharedPayload);
+    assert.ok(secondSharedReservation, "a second shared high-context request should be admitted");
+    assert.ok(
+      before.reservedArtifactBytes + expectedSharedReservation * 3 >
+        before.artifactFootprintLimitBytes,
+      "three high-context reservations must exceed the process-wide cap"
     );
     assert.equal(
       reserveCallLogArtifactPreparation(sharedPayload),
       null,
-      "a concurrent second request must fail open at aggregate admission"
+      "a third concurrent request must fail open at aggregate admission"
     );
     assert.equal(
       getCallLogArtifactWriterSnapshot().preparationRefusalsAggregateReservationBudgetTotal,
@@ -545,6 +566,7 @@ test("high-context Antigravity stage bodies use exact shared and aggregate reser
       before.preparationRefusalsSingleArtifactBudgetTotal + 1
     );
   } finally {
+    releaseCallLogArtifactPreparation(secondSharedReservation);
     releaseCallLogArtifactPreparation(sharedReservation);
   }
 
@@ -599,7 +621,7 @@ test("writer health snapshot tracks bounded reservations and exposes no artifact
   const refusalsBefore = before.preparationRefusalsTotal;
   const omissionCountBefore = before.detailOmissionsTotal;
   assert.equal(
-    reserveCallLogArtifactPreparation({ requestBody: "x".repeat(7 * 1024 * 1024) }),
+    reserveCallLogArtifactPreparation({ requestBody: "x".repeat(18 * 1024 * 1024) }),
     null
   );
   const refused = getCallLogArtifactWriterSnapshot();
@@ -627,7 +649,7 @@ test("writer health snapshot tracks bounded reservations and exposes no artifact
 });
 
 test("aggregate artifact budget includes active writes and releases reservations on completion", async () => {
-  const largePayload = "x".repeat(2_000_000);
+  const largePayload = "x".repeat(4_000_000);
   const writes = Array.from({ length: 7 }, (_, index) => {
     const artifact = buildArtifact(`worker-budget-${index}`);
     artifact.requestBody = { content: largePayload };
@@ -647,7 +669,7 @@ test("aggregate artifact budget includes active writes and releases reservations
 });
 
 test("queue budget overflow stores only a safe private diagnostic reference stub", async () => {
-  const largePayload = "x".repeat(2_000_000);
+  const largePayload = "x".repeat(4_000_000);
   const writes = Array.from({ length: 6 }, (_, index) => {
     const artifact = buildArtifact(`worker-stub-budget-${index}`);
     artifact.requestBody = { content: largePayload };

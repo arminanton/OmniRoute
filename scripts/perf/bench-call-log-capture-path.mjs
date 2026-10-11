@@ -60,6 +60,8 @@ let ensureDbInitialized;
 let callLogsDir;
 let artifactWriter;
 let sampler;
+let baselineRssBytes = process.memoryUsage().rss;
+let baselineHeapUsedBytes = process.memoryUsage().heapUsed;
 let peakRssBytes = process.memoryUsage().rss;
 let peakHeapUsedBytes = process.memoryUsage().heapUsed;
 const ids = [];
@@ -165,6 +167,11 @@ try {
     import("../../open-sse/utils/providerRequestLogging.ts"),
   ]);
   await ensureDbInitialized();
+  const initializedMemory = process.memoryUsage();
+  baselineRssBytes = initializedMemory.rss;
+  baselineHeapUsedBytes = initializedMemory.heapUsed;
+  peakRssBytes = initializedMemory.rss;
+  peakHeapUsedBytes = initializedMemory.heapUsed;
 
   let fakeUpstreamRequests = 0;
   globalThis.fetch = async (_input, init) => {
@@ -332,8 +339,14 @@ try {
         artifactsWithStreamChunks,
         storedProviderBodies,
         artifactBytes,
+        baselineRssMiB: Math.round((baselineRssBytes / 1024 / 1024) * 10) / 10,
+        baselineHeapUsedMiB: Math.round((baselineHeapUsedBytes / 1024 / 1024) * 10) / 10,
         peakSampledRssMiB: Math.round((peakRssBytes / 1024 / 1024) * 10) / 10,
+        peakSampledRssDeltaMiB:
+          Math.round(((peakRssBytes - baselineRssBytes) / 1024 / 1024) * 10) / 10,
         peakSampledHeapUsedMiB: Math.round((peakHeapUsedBytes / 1024 / 1024) * 10) / 10,
+        peakSampledHeapUsedDeltaMiB:
+          Math.round(((peakHeapUsedBytes - baselineHeapUsedBytes) / 1024 / 1024) * 10) / 10,
         kernelPeakRssMiB: readLinuxPeakRssMiB(),
         processIoBytes:
           ioBefore && ioAfter
@@ -349,6 +362,7 @@ try {
         processIoScope:
           "DB initialized to completed call-log readback; includes SQLite and artifact I/O",
         artifactWriter: {
+          artifactFootprintLimitBytes: writer.artifactFootprintLimitBytes,
           activeJobsHighWater: writer.activeJobsHighWater,
           queuedArtifactsHighWater: writer.queuedArtifactsHighWater,
           reservedArtifactBytesHighWater: writer.reservedArtifactBytesHighWater,

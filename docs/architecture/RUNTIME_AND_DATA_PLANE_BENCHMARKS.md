@@ -1640,6 +1640,33 @@ reservation, 49 KiB of process writes, and 60 KiB of artifacts, with identical a
 artifact completeness. In this workload, stream excerpts were not the principal reason details
 were omitted.
 
+#### Call-log admission estimate: account for actual JSON strings (2026-10-11)
+
+The earlier measurements above used a deliberately broad estimate of ten bytes per UTF-16 code unit
+for every string. That overestimated ordinary ASCII text: two in-memory copies need about four bytes
+per code unit and its JSON representation is about one byte, before object/envelope overhead. The
+estimator now counts the actual UTF-8/JSON-escaped string length (using a fast path for unescaped
+ASCII) while preserving conservative handling for control characters and non-ASCII. The existing
+128 MiB default admission cap is unchanged. An opt-in `OMNIROUTE_CALL_LOG_ARTIFACT_FOOTPRINT_LIMIT_BYTES`
+setting is available for measured deployments and is clamped to 512 MiB; the result below did not
+need it.
+
+A single post-change run repeated the 70-client capture-path workload with 131,072-byte requests,
+32,768-byte target responses, stream capture enabled, and the default cap. The serialized response
+was 33,660 bytes per client across 35 chunks. All 70 request summaries and complete detail artifacts
+were readable, including all 70 provider bodies and stream tracks. Admission refusals, omissions,
+corrupt artifacts, and writer failures were all zero. The process completed the run in 1,139 ms;
+artifact queue reservation peaked at 124,063,880 of 134,217,728 bytes. Sampled RSS rose from 124.2
+to 320.1 MiB (delta 196.0 MiB), sampled heap from 30.7 to 122.2 MiB, and kernel `VmHWM` was 331.6
+MiB. It wrote 19.3 MB of SQLite and artifact data and produced 11.7 MB of artifacts.
+
+This result changes the diagnosis for this fixture: the former 39/70 admission result was caused by
+the over-conservative size estimate, not stream capture or worker failure, and increasing the budget
+was unnecessary. The process peak remains modest in this synthetic isolated run, but one sample
+against a fake upstream does not establish full Next.js/container or real-provider behavior. Keep
+the default unchanged and repeat under the standalone HTTP path and representative high-context
+payloads before treating the admission issue as closed.
+
 #### Bun 1.4.2 source-level runtime comparison
 
 The same harness was run twice per cell against the same blue source tree under Node 24.21.0 and

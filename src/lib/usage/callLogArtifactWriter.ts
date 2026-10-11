@@ -19,10 +19,32 @@ const MAX_QUEUED_DIAGNOSTIC_STUB_BYTES = 16 * 1024 * 1024;
 // The estimate reserves for the retained source value, its worker clone, and
 // worst-case JSON escaping while the active artifact is serialized. It is a
 // peak-footprint budget for the active write plus all waiting writes.
-const MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES = 128 * 1024 * 1024;
+const DEFAULT_QUEUED_ARTIFACT_FOOTPRINT_BYTES = 128 * 1024 * 1024;
+const MAX_QUEUED_ARTIFACT_FOOTPRINT_LIMIT_BYTES = 512 * 1024 * 1024;
+const CALL_LOG_ARTIFACT_FOOTPRINT_ENV = "OMNIROUTE_CALL_LOG_ARTIFACT_FOOTPRINT_LIMIT_BYTES";
+
+/**
+ * The artifact footprint cap covers preparation leases plus queued and active writer work.
+ * Operators may raise it for larger heaps, but the hard 512 MiB ceiling keeps a malformed
+ * environment value from removing the bound entirely.
+ */
+export function resolveCallLogArtifactFootprintLimit(env: NodeJS.ProcessEnv = process.env): number {
+  const configured = env[CALL_LOG_ARTIFACT_FOOTPRINT_ENV];
+  if (configured === undefined || configured.trim().length === 0) {
+    return DEFAULT_QUEUED_ARTIFACT_FOOTPRINT_BYTES;
+  }
+  const value = Number(configured);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    return DEFAULT_QUEUED_ARTIFACT_FOOTPRINT_BYTES;
+  }
+  return Math.min(value, MAX_QUEUED_ARTIFACT_FOOTPRINT_LIMIT_BYTES);
+}
+
+const MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES = resolveCallLogArtifactFootprintLimit();
 const MAX_ESTIMATED_VALUES = 100_000;
 const MAX_ESTIMATED_OBJECTS = 50_000;
 const MAX_ESTIMATOR_DEPTH = 64;
+const JSON_STRING_ESCAPE_CHARACTER = /["\\\u0000-\u001f]/;
 const IDLE_TIMEOUT_MS = 30_000;
 const CLOSE_TIMEOUT_MS = 2_000;
 const WARNING_INTERVAL_MS = 30_000;
@@ -272,6 +294,25 @@ export type CallLogArtifactFootprintEstimate = {
     "budget_exceeded" | "value_limit" | "object_limit" | "depth_limit" | "cycle" | "unsupported";
 };
 
+function estimateJsonStringBytes(value: string): number {
+  const utf8Bytes = Buffer.byteLength(value, "utf8");
+  if (utf8Bytes === value.length && !JSON_STRING_ESCAPE_CHARACTER.test(value)) {
+    return value.length + 2;
+  }
+
+  let bytes = 2; // Opening and closing JSON quotes.
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code === 0x22 || code === 0x5c) bytes += 2;
+    else if (code < 0x20)
+      bytes +=
+        code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d ? 2 : 6;
+    else if (code < 0x80) bytes++;
+    else bytes += 6; // Upper bound for UTF-8 output or a \uXXXX escape.
+  }
+  return bytes;
+}
+
 function hasDynamicToJSON(value: object, prototype: object | null): boolean {
   const descriptors = [
     Object.getOwnPropertyDescriptor(value, "toJSON"),
@@ -287,8 +328,10 @@ function hasDynamicToJSON(value: object, prototype: object | null): boolean {
 
 /**
  * Estimate the temporary footprint of an artifact without serializing it.
- * String accounting allows ten bytes per UTF-16 code unit: source storage,
- * structured-clone storage, and up to six JSON bytes for escaped output.
+ * String accounting covers two retained copies at two bytes per UTF-16 code unit,
+ * plus an upper bound on the JSON-escaped output. The preparation lease adds a second
+ * projection margin before admission; printable ASCII therefore costs five bytes per
+ * code unit at the base estimate while controls and non-ASCII text remain conservative.
  * Object/array overhead is deliberately rounded up. Cycles, accessors, and
  * unsupported values fail closed for detail capture; inference stays fail-open.
  */
@@ -312,7 +355,9 @@ export function estimateCallLogArtifactFootprint(value: unknown): CallLogArtifac
     if (current === null) return add(32) ? null : { estimatedBytes, reason: "budget_exceeded" };
     switch (typeof current) {
       case "string":
-        return add(64 + current.length * 10) ? null : { estimatedBytes, reason: "budget_exceeded" };
+        return add(64 + current.length * 4 + estimateJsonStringBytes(current))
+          ? null
+          : { estimatedBytes, reason: "budget_exceeded" };
       case "number":
       case "boolean":
         return add(64) ? null : { estimatedBytes, reason: "budget_exceeded" };
