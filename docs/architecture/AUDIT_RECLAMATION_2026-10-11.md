@@ -1,6 +1,6 @@
 # Audit directory preservation and reclamation
 
-**Status:** inventory complete; archive and deletion pending. No audit files have been removed.
+**Status:** archived and removed from Maria on 2026-10-11. The protected archive is verified on DevVM; no raw audit payloads were pushed to GitHub.
 
 The local `/home/ubuntu/_/omni/audit` tree is about 21 GiB. Its largest measured areas are:
 
@@ -16,6 +16,6 @@ The local `/home/ubuntu/_/omni/audit` tree is about 21 GiB. Its largest measured
 
 All 11 `ledger-release-*` commit snapshots checked during this inventory are reachable from at least one `origin/*` ref. These source revisions therefore do not need duplicate branches. This inventory does not upload copied `node_modules`, build outputs, executable bundles, raw request/response logs, or private payloads to GitHub.
 
-The safe reclamation sequence is to copy the audit tree as an access-restricted, compressed archive to `/mnt/devvm/custom/omni-audit-archive-20261011/`, verify its checksum and readable archive listing, then remove the local audit tree in low-priority batches while watching Maria's I/O pressure. This preserves protected evidence off-host without publishing it to the fork. Regenerable `node_modules`, `.build` output, CLI trees, and the obsolete Git-metadata backup can then be removed from the archive if a smaller retained evidence set is desired.
+The complete audit tree was streamed to `/mnt/devvm/custom/omni-audit-archive-20261011/audit-20261011.tar.zst` with root metadata, ACLs, xattrs, and hardlinks preserved. The file is 7,756,273,007 bytes (7.22 GiB), mode `0600` inside a mode-`0700` directory. `zstd -t` and a full `tar` listing both passed. SHA-256: `5e879fd426ea8264aef79be3151b7aac0a2b3fa169f2bf279e4120020d20a3bd`.
 
-**Not yet done:** no archive has been transferred or verified, and no audit data has been deleted. Protected payload contents were not inspected.
+After verification, the local `/home/ubuntu/_/omni/audit` tree was removed in a low-priority batch. Maria's available root space increased from about 45 GiB to 62 GiB (about 17 GiB reclaimed). Some directories contained hardlinks shared across snapshots, so the physical reclaim was smaller than their individually measured `du` totals. I/O pressure rose during ext4 discard and later settled; no services or user sessions were stopped. Protected payload contents were not inspected, and the archive remains private on DevVM.
