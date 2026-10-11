@@ -103,7 +103,10 @@ test("versioned inference and media endpoints use source-backed success schemas"
     "VideoBridgeDrilldownDeleteResponse"
   );
   assertRef(responseSchema("/api/v1/videos/generations", "get"), "ModelListResponse");
-  assertRef(responseSchema("/api/v1/videos/generations", "post"), "MediaGenerationResponse");
+  assert.deepEqual(responseSchema("/api/v1/videos/generations", "post").oneOf, [
+    { $ref: "#/components/schemas/MediaGenerationResponse" },
+    { $ref: "#/components/schemas/V1DurableVideoTask" },
+  ]);
   assertRef(responseSchema("/api/v1/web/fetch", "post"), "WebFetchResponse");
 });
 

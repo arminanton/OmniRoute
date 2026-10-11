@@ -1494,6 +1494,12 @@ references as well as the new text table, so it must not be attributed to the ne
 dictionaries are local to each artifact: cross-request blob sharing remains unimplemented,
 avoiding shared ownership, retention-reference, and cross-key deduplication concerns.
 
+A fresh 2026-10-11 rerun on Node 24.21.0 / ARM64 reproduced the exact byte counts. The 100-artifact
+text-table transform measured 0.160 ms median / 0.260 ms p95; five unique 256 KiB context strings
+per artifact scanned in 0.018 / 0.047 ms without changing the representation. The complete writer
+stored 1,847,880 B from 50,537,450 B at 0.479 / 0.834 ms median / p95. These are sequential local
+synthetic measurements, not live request heap or concurrent throughput.
+
 The optional exact-text pass fails open when it sees accessors, unsupported object graphs, more than
 100,000 visited values, arrays longer than 100,000 entries, more than 4,096 unique candidate strings,
 over 8 Mi UTF-16 code units of 256–65,536-unit candidate text, or a JSON-escaped dictionary over
@@ -1520,11 +1526,13 @@ small candidate decoder reconstructs every timestamped track string in the same 
 write times were 6.145 ms for current then 0.947 ms for the candidate; these sequential samples are
 not a speed comparison because they include first-write and filesystem-cache effects.
 
-The timestamp/ref encoding exists only inside this measurement. Production capture still stores
-timestamp-prefixed strings, production readers do not decode the candidate format, and no production
-queue-memory, request-heap, SSE-latency, or conversation-reconstruction savings were measured. The
-next validation before any format change would be a focused production reader/writer prototype test
-that preserves byte-identical reconstructed stream strings, followed by a bounded lifecycle run.
+The 2026-10-11 rerun measured 6.182 ms for the current write and 0.877 ms for the candidate, again
+on one ordered fixture. The timestamp/ref encoding exists only inside this measurement. Production
+capture still stores timestamp-prefixed strings, production readers do not decode the candidate
+format, and no production queue-memory, request-heap, SSE-latency, or conversation-reconstruction
+savings were measured. The next validation before any format change would be a focused production
+reader/writer prototype test that preserves byte-identical reconstructed stream strings, followed by
+a bounded lifecycle run.
 
 Structured `error`/`fatal` repeat suppression is a different mechanism. It scopes the 5-second
 deduplication key to severity and component, does not retain messages over 4,096 characters, expires
@@ -2212,11 +2220,12 @@ ownership remains unchanged.
 - Capture the management-only pressure sample on `GET /api/monitoring/health` with a credential
   accepted by the candidate. Blue exposes the configured immediate-heap threshold, V8 heap,
   process external/array-buffer/RSS, cgroup, host-PSI source, guard state, and sample age together.
-  At the latest read-only check on 2026-10-09 18:49 UTC, the active-slot marker still named `green`,
-  but `omni-local-next@app.service` was inactive and the local API proxy had no app backend. A prior
-  manager-key probe also returned `403 Invalid management token`; neither source can currently
-  provide a live pressure sample. A heap snapshot or isolated allocation profile is still required
-  to identify retained V8 objects.
+  At the latest read-only check on 2026-10-11, `omni-local-next@app.service` and
+  `omni-api-local.service` were inactive, and `127.0.0.1:20128` had no listener. Maria had 21 GiB
+  available memory and 62 GiB free on `/`; current memory and I/O PSI `avg10` were zero. This host
+  sample does not attribute memory to the application. The earlier manager-key probe returned
+  `403 Invalid management token`; a live management sample, safe heap snapshot, or isolated
+  allocation profile is still needed to identify retained V8 objects.
 - Assemble a canary OCI image from the now-passing blue standalone build and verify a complete
   request artifact through that container. The earlier captured candidate-image incident lost 118
   detailed artifacts and had no artifact file newer than image start; do not treat the
@@ -2228,13 +2237,14 @@ ownership remains unchanged.
   capture a safe live app heap/object profile. The sampled guard's same-process cgroup-high recovery
   now passes a bounded isolated canary; full HTTP-route behavior under real request load and retained
   object attribution remain unverified.
-- Build and smoke the production OCI image on a dedicated builder with enough memory and native
+- Build and smoke a candidate OCI image on a dedicated builder with enough memory and native
   overlay. The Node/Webpack source build and Bun/Turbopack source-only standalone build both
   completed, but no OCI image was assembled. The Bun 1.4.2 build required a 17 GiB cgroup cap and
-  reached 16.25 GiB peak with host swap use; it was not a low-footprint result. Maria currently has
-  only about 12 GiB free disk, while DevVM has about 5.6 GiB available RAM and 4.2 GiB of swap in
-  use; the other known Linux builders are offline. Preserve `memory.peak`, `memory.events`, wall
-  time, and output size when a suitable isolated builder is available.
+  reached 16.25 GiB peak with host swap use; it was not a low-footprint result. The 2026-10-11
+  snapshot shows Maria at 62 GiB free disk / 21 GiB available RAM and DevVM at 842 GiB free on `/`
+  / 10 GiB available RAM; DevVM does not expose `/proc/pressure/{memory,io}`. The earlier build
+  results remain source-only and no packaged OCI image has been assembled. Preserve `memory.peak`,
+  `memory.events`, wall time, and output size for the OCI build/runtime acceptance run.
 - TPROXY is a small first-party C Node-API addon in `src/mitm/tproxy/native/transparent.c`, not an
   installed package dependency. The upstream TPROXY notes say its `build/` and `prebuilds/`
   directories are ignored and the binary is built from source; the loader can probe a prebuild, but
@@ -2262,11 +2272,12 @@ ownership remains unchanged.
   acceptable only after checking image/container free space and retention cleanup.
 - Account-concurrency and real-provider validation remain open after the synthetic standalone
   Next/middleware E2E. The prior route-handler runs used mock provider credentials, tool-call cycles,
-  authentication, and verified artifacts. The new available-capacity selector balances 100 held
-  selections across four accounts, but request reservations are not yet wired into direct media,
-  embedding, search, and utility credential-helper paths. Extend coverage there before claiming
-  whole-API capacity routing. Actual account admission at 70–100 active requests, real upstream
-  429/quota behavior, and production OCI image behavior remain unverified. At
+  authentication, and verified artifacts. Source now reserves account capacity in chat, embeddings,
+  rerank, search/coalescing, web fetch, OCR/moderation, image, audio, and shared-media paths; recent
+  coverage was revalidated on 2026-10-11 with 96/96 focused account-admission, media cancellation,
+  call-log, and OpenAPI tests passing. The available-capacity selector previously balanced 100 held
+  selections across four accounts. A complete all-endpoint concurrency matrix and real upstream
+  429/quota behavior remain unverified; no packaged OCI route or production behavior is implied. At
   200,000 synthetic context bytes per user turn, 100 conversations completed 200/200 turns with
   200/200 artifacts and private traces. At 700,000 bytes, ordinary artifact capture alone completed
   140/140 turns but omitted 120/140 details at the 128 MiB preparation reservation ceiling. A new
@@ -2321,12 +2332,15 @@ ownership remains unchanged.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the source audit for response schemas and conditional auth behavior. The deterministic
-  inventory reports 978 of 978 body-bearing response candidates with declared schemas on every
-  non-`204` success; route coverage is 705/705. It lists no operations with a missing
-  effective security declaration; all 499 operations whose text signals conditional auth now have
-  declarations. These are documentation review queues, not proof that handlers are insecure or
-  that the declared response schemas are semantically complete.
+- Continue the semantic source audit for response schemas and conditional auth behavior. On
+  2026-10-11, OpenAPI route coverage passed 707/707, literal 4xx/5xx coverage passed for all 706
+  route files, security-tier annotations matched `routeGuard.ts`, and canonical/public YAML files
+  were byte-identical. The deterministic inventory currently finds 981/981 typed non-204 success
+  candidates, zero missing/invalid security declarations, and 510 conditional-auth descriptions with
+  effective declarations. The inference-contract test now checks video POST 200 as a union of
+  `MediaGenerationResponse` and `V1DurableVideoTask`; that route shape had changed while the test
+  still expected a single `$ref`. These gates do not prove every response schema is semantically
+  complete. Dynamic/helper/middleware response behavior still needs source-by-source review.
 
 ## ARM64 DevVM Node, Bun, Rust, and Next.js runs (2026-10-11)
 

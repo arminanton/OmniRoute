@@ -313,11 +313,19 @@ test("async transcription keeps local occupancy through terminal polling after c
     assert.equal(calls, 3, "polling continues after remote job acceptance");
     assert.equal(occupancy.getAccountRequestInFlightCount(asyncAudioConnectionId), 1);
     assert.equal(uploadSignal?.aborted, true, "caller cancellation is propagated to upload work");
-    assert.equal(submitSignal, undefined, "job dispatch is detached after the pre-dispatch check");
+    assert.ok(submitSignal, "job dispatch has a server-owned lifecycle deadline");
+    assert.notEqual(submitSignal, controller.signal, "caller cancellation cannot abort dispatch");
+    assert.equal(submitSignal.aborted, false, "caller cancellation leaves dispatch active");
     assert.equal(
       pollSignal,
-      undefined,
-      "accepted remote work is polled without caller cancellation"
+      submitSignal,
+      "accepted remote work shares the server-owned lifecycle deadline"
+    );
+    assert.notEqual(pollSignal, controller.signal, "caller cancellation cannot abort polling");
+    assert.equal(
+      pollSignal?.aborted,
+      false,
+      "caller cancellation leaves accepted-job polling active"
     );
     finishPoll(Response.json({ status: "completed", text: "done" }));
     const response = await responsePromise;
