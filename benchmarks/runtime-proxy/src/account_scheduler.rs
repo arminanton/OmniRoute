@@ -293,7 +293,7 @@ fn try_reserve_slot(account: &Account) -> bool {
     let max_in_flight = account.metadata.max_in_flight;
     account
         .in_flight
-        .try_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |current| {
+        .fetch_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |current| {
             (current < max_in_flight).then_some(current + 1)
         })
         .is_ok()
