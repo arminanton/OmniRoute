@@ -1,3 +1,7 @@
+---
+title: "Audit Directory Preservation and Reclamation"
+---
+
 # Audit directory preservation and reclamation
 
 **Status:** archived and removed from Maria on 2026-10-11. The protected archive was re-verified on DevVM on 2026-10-11; no raw audit payloads were pushed to GitHub.
