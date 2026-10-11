@@ -43,10 +43,21 @@ export function isApiKeyResourceAccessible(
 
 export async function getApiKeyRequestScope(
   request: Request,
-  options: { requireAuthenticated?: boolean } = {}
+  options: {
+    requireAuthenticated?: boolean;
+    allowUrl?: boolean;
+    allowClientApiKeyHeader?: boolean;
+  } = {}
 ): Promise<ApiKeyRequestScope> {
   const isSessionAuth = await isDashboardSessionAuthenticated(request);
-  let apiKey = extractApiKey(request);
+  let apiKey = extractApiKey(request, { allowUrl: options.allowUrl });
+  // Some client-facing OpenAPI operations accept x-api-key as a standard API
+  // key even when the Anthropic protocol marker is absent. Keep this opt-in so
+  // unrelated routes retain extractApiKey's guarded x-api-key behavior.
+  if (!apiKey && options.allowClientApiKeyHeader) {
+    const clientApiKey = request.headers.get("x-api-key") ?? request.headers.get("X-Api-Key");
+    if (clientApiKey?.trim()) apiKey = clientApiKey.trim();
+  }
   let apiKeyMetadata: ApiKeyRequestScope["apiKeyMetadata"] = null;
 
   if (options.requireAuthenticated && !isSessionAuth) {

@@ -10,6 +10,10 @@ import {
   installPeriodicOwnershipAuthority,
   periodicServicesAllowed,
 } from "../../src/lib/periodicServices.ts";
+import {
+  startDurableAgnesVideoTaskPoller,
+  stopDurableAgnesVideoTaskPoller,
+} from "../../src/lib/durableAgnesVideoTaskPoller.ts";
 
 const data = mkdtempSync(join(tmpdir(), "omni-maint-runtime-"));
 process.env.OMNI_SHARED_ADMISSION = "true";
@@ -58,6 +62,44 @@ test("failed actual runtime startup releases the owner and does not invent readi
   assert.equal(globalThis.__omniSharedCoordinator?.hasLiveResource("task:maintenance"), false);
 });
 
+test("durable Agnes poller starts only inside the existing maintenance owner context", async () => {
+  const stop = new AbortController();
+  let ticks = 0;
+  const running = runMaintenanceRuntime(async () => {
+    const owner = getFencedTaskContext();
+    assert.equal(owner?.key, "maintenance");
+    installPeriodicOwnershipAuthority(() => owner!.assertOwner());
+    assert.equal(
+      startDurableAgnesVideoTaskPoller({
+        intervalMs: 1,
+        processDue: async (_limit, signal) => {
+          assert.equal(signal.aborted, false);
+          ticks += 1;
+        },
+      }),
+      true
+    );
+    assert.equal(
+      globalThis.__omniSharedCoordinator?.hasLiveResource("task:maintenance"),
+      true,
+      "the poller reuses this runtime's one maintenance lease"
+    );
+    const deadline = Date.now() + 1_000;
+    while (ticks === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.ok(ticks > 0, "a fenced timer tick completes without reacquiring task:maintenance");
+    stop.abort(new Error("maintenance test stop"));
+  }, stop.signal);
+  await assert.rejects(running, /maintenance test stop/);
+  await stopDurableAgnesVideoTaskPoller();
+  assert.equal(
+    globalThis.__omniSharedCoordinator?.hasLiveResource("task:maintenance"),
+    false,
+    "graceful poller stop releases before the maintenance context exits"
+  );
+});
+
 test("wrong or generation role cannot launch maintenance", async () => {
   process.env.OMNI_COORDINATION_PROCESS_ROLE = "generation";
   try {
@@ -70,4 +112,8 @@ test("wrong or generation role cannot launch maintenance", async () => {
   } finally {
     process.env.OMNI_COORDINATION_PROCESS_ROLE = "maintenance";
   }
+});
+
+test("durable Agnes poller fails closed without a live maintenance owner", () => {
+  assert.equal(startDurableAgnesVideoTaskPoller(), false);
 });

@@ -501,6 +501,22 @@ export async function registerNodejs(): Promise<void> {
     await import("@/lib/freeProxyProviders/scheduler");
 
   initGracefulShutdown();
+  const explicitBackgroundServicesDisabled = new Set(["1", "true", "yes", "on"]).has(
+    (process.env.OMNIROUTE_DISABLE_BACKGROUND_SERVICES ?? "").trim().toLowerCase()
+  );
+  if (
+    !explicitBackgroundServicesDisabled &&
+    process.env.OMNI_COORDINATION_PROCESS_ROLE === "maintenance"
+  ) {
+    const { startDurableAgnesVideoTaskPoller } = await import("@/lib/durableAgnesVideoTaskPoller");
+    if (startDurableAgnesVideoTaskPoller()) {
+      console.log("[STARTUP] Durable Agnes video task poller scheduled on maintenance owner");
+    } else {
+      console.warn(
+        "[STARTUP] Durable Agnes video task poller is disabled; tasks advance only when their status URL is requested"
+      );
+    }
+  }
   initApiBridgeServer();
   startSpendBatchWriter();
   registerDefaultGuardrails();

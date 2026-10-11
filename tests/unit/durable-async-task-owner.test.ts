@@ -13,14 +13,17 @@ import {
 function createInput(
   overrides: Partial<CreateDurableAsyncTaskInput> = {}
 ): CreateDurableAsyncTaskInput {
+  const idempotencyScope = overrides.idempotencyScope ?? "api-key-row-id";
   return {
+    apiKeyId: overrides.apiKeyId ?? idempotencyScope,
     provider: "example-video",
     model: "video-model-v1",
     connectionId: "connection-opaque-id",
     strategy: "example-submit-poll",
     strategyVersion: "1",
-    idempotencyScope: "api-key-row-id",
+    idempotencyScope,
     idempotencyKey: "client-request-stable-key",
+    requestFingerprint: "a".repeat(64),
     deadlineAt: 100_000,
     capacity: [{ key: "quota:v1:example-account", maxConcurrency: 1 }],
     ...overrides,
@@ -40,6 +43,7 @@ test("accepted task ownership survives restart, is idempotent, and releases capa
     if (created.kind !== "created") throw new Error(`expected created task, got ${created.kind}`);
     submitCount += 1;
     assert.equal(created.task.state, "submitting");
+    assert.equal(created.task.apiKeyId, request.apiKeyId);
     assert.equal(created.task.remoteTaskId, null);
 
     const competingWaiter = firstCoordinator.enqueue(
@@ -75,12 +79,44 @@ test("accepted task ownership survives restart, is idempotent, and releases capa
     assert.equal(submitCount, 1, "a restart/retry must not cause another provider submit");
     assert.equal(duplicate.task.id, created.task.id);
     assert.equal(duplicate.task.remoteTaskId, "remote-job-123");
+    assert.equal(
+      owner.findSubmission({
+        apiKeyId: request.apiKeyId,
+        provider: request.provider,
+        model: request.model,
+        strategy: request.strategy,
+        strategyVersion: request.strategyVersion,
+        idempotencyScope: request.idempotencyScope,
+        idempotencyKey: request.idempotencyKey,
+        requestFingerprint: request.requestFingerprint,
+      })?.id,
+      created.task.id
+    );
+    assert.equal(owner.getTaskForScope(created.task.id, "other-api-key"), null);
+    assert.equal(
+      owner.getTaskForScope(created.task.id, request.idempotencyScope)?.id,
+      created.task.id
+    );
     assert.deepEqual(
       owner.listDueAcceptedTasks(now + 20, 5).map((task) => task.id),
       [created.task.id]
     );
     assert.throws(
       () => owner.createSubmission({ ...request, connectionId: "different-account" }, now + 20),
+      /idempotency_key_conflict/
+    );
+    assert.throws(
+      () =>
+        owner.findSubmission({
+          apiKeyId: request.apiKeyId,
+          provider: request.provider,
+          model: request.model,
+          strategy: request.strategy,
+          strategyVersion: request.strategyVersion,
+          idempotencyScope: request.idempotencyScope,
+          idempotencyKey: request.idempotencyKey,
+          requestFingerprint: "b".repeat(64),
+        }),
       /idempotency_key_conflict/
     );
     for (const changed of [
@@ -121,10 +157,29 @@ test("accepted task ownership survives restart, is idempotent, and releases capa
       () => owner.finishPollTask(reclaimed, "rejected" as never, undefined, now + 1_022),
       /invalid_terminal_task_state/
     );
-    assert.equal(owner.finishPollTask(oldPollClaim, "succeeded", undefined, now + 1_022), false);
-    assert.equal(owner.finishPollTask(reclaimed, "succeeded", undefined, now + 1_023), true);
+    assert.equal(
+      owner.finishPollTaskWithArtifact(
+        oldPollClaim,
+        "file-test-artifact",
+        now + 10_000,
+        now + 1_022
+      ),
+      false
+    );
+    assert.equal(owner.markArtifactPending(reclaimed, now + 1_023), true);
+    const slotDuringArtifactSave = firstCoordinator.tryAcquire(competingWaiter, 5_000, now + 1_024);
+    assert.ok(
+      slotDuringArtifactSave,
+      "provider capacity is released when the remote task is terminal"
+    );
+    firstCoordinator.release(slotDuringArtifactSave);
+    firstCoordinator.cancel(competingWaiter);
+    assert.equal(
+      owner.finishPollTaskWithArtifact(reclaimed, "file-test-artifact", now + 10_000, now + 1_025),
+      true
+    );
     assert.equal(owner.getTask(created.task.id)?.state, "succeeded");
-    const terminalDuplicate = owner.createSubmission(request, now + 1_025);
+    const terminalDuplicate = owner.createSubmission(request, now + 1_026);
     if (terminalDuplicate.kind !== "existing") {
       throw new Error(`expected terminal idempotency record, got ${terminalDuplicate.kind}`);
     }
@@ -133,15 +188,10 @@ test("accepted task ownership survives restart, is idempotent, and releases capa
       () =>
         owner.createSubmission(
           { ...request, capacity: [{ key: "quota:v1:example-account", maxConcurrency: 2 }] },
-          now + 1_026
+          now + 1_027
         ),
       /idempotency_key_conflict/
     );
-
-    const afterCompletion = firstCoordinator.tryAcquire(competingWaiter, 5_000, now + 1_024);
-    assert.ok(afterCompletion, "terminal transition must release the durable capacity row");
-    firstCoordinator.release(afterCompletion);
-    firstCoordinator.cancel(competingWaiter);
   } finally {
     owner.close();
     firstCoordinator.close();
@@ -234,6 +284,108 @@ test("unknown submit stays reserved and cannot be reclaimed for polling or resub
   }
 });
 
+test("cancellation is persisted without releasing provider capacity until a fenced terminal observation", () => {
+  const directory = mkdtempSync(join(tmpdir(), "omni-cancel-video-task-"));
+  const filename = join(directory, "coordination.sqlite");
+  const now = 4_000;
+  const coordinator = new SqliteCoordinator(filename, "cancel-test-worker");
+  const owner = new SqliteAsyncTaskOwner(filename);
+  const request = createInput({ idempotencyScope: "cancel-owner", idempotencyKey: "cancel-key" });
+  try {
+    const created = owner.createSubmission(request, now);
+    if (created.kind !== "created") throw new Error(`expected created task, got ${created.kind}`);
+    assert.equal(
+      owner.recordAccepted(created.task.id, created.submissionFence, "remote-cancel-job", now + 1),
+      true
+    );
+    const cancelled = owner.requestCancellation(
+      created.task.id,
+      request.idempotencyScope,
+      "caller_cancelled",
+      now + 2
+    );
+    assert.equal(cancelled?.state, "cancel_requested");
+    const waiter = coordinator.enqueue(
+      [{ key: request.capacity[0].key, limit: 1 }],
+      90_000,
+      10,
+      now + 3
+    );
+    assert.equal(coordinator.tryAcquire(waiter, 5_000, now + 3), null);
+
+    const claim = owner.claimPollOwner(created.task.id, "cancel-poller", 1_000, now + 4);
+    assert.ok(claim);
+    assert.equal(owner.finishPollTask(claim, "cancelled", "caller_cancelled", now + 5), true);
+    const lease = coordinator.tryAcquire(waiter, 5_000, now + 6);
+    assert.ok(lease, "capacity is released only after remote task is observed terminal");
+    coordinator.release(lease);
+    coordinator.cancel(waiter);
+  } finally {
+    owner.close();
+    coordinator.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("bounded retention prunes only terminal idempotency rows and keeps unknown work reserved", () => {
+  const directory = mkdtempSync(join(tmpdir(), "omni-terminal-video-retention-"));
+  const filename = join(directory, "coordination.sqlite");
+  const now = 5_000;
+  const coordinator = new SqliteCoordinator(filename, "retention-test-worker");
+  const owner = new SqliteAsyncTaskOwner(filename);
+  const terminalInput = createInput({
+    idempotencyScope: "retention-owner",
+    idempotencyKey: "terminal-key",
+    capacity: [{ key: "quota:v1:terminal-account", maxConcurrency: 1 }],
+  });
+  const unknownInput = createInput({
+    idempotencyScope: "retention-owner",
+    idempotencyKey: "unknown-key",
+    capacity: [{ key: "quota:v1:unknown-account", maxConcurrency: 1 }],
+  });
+  try {
+    const terminal = owner.createSubmission(terminalInput, now);
+    if (terminal.kind !== "created") throw new Error(`expected created task, got ${terminal.kind}`);
+    assert.equal(
+      owner.recordAccepted(terminal.task.id, terminal.submissionFence, "terminal-job", now + 1),
+      true
+    );
+    const claim = owner.claimPollOwner(terminal.task.id, "retention-poller", 1_000, now + 1);
+    assert.ok(claim);
+    assert.equal(owner.markArtifactPending(claim, now + 2), true);
+    assert.equal(
+      owner.finishPollTaskWithArtifact(claim, "file-retention-test", now + 100_000, now + 3),
+      true
+    );
+
+    const unknown = owner.createSubmission(unknownInput, now + 3);
+    if (unknown.kind !== "created") throw new Error(`expected created task, got ${unknown.kind}`);
+    owner.markSubmissionUnknown(unknown.task.id, unknown.submissionFence, "lost_submit", now + 4);
+
+    const pruneNow = now + 3 + 7 * 24 * 60 * 60 * 1000;
+    assert.equal(owner.pruneExpiredTerminalTasks(pruneNow, 10), 1);
+    assert.equal(owner.getTask(terminal.task.id), null);
+    assert.equal(owner.getTask(unknown.task.id)?.state, "submission_unknown");
+
+    const waiter = coordinator.enqueue(
+      [{ key: "quota:v1:unknown-account", limit: 1 }],
+      pruneNow + 10_000,
+      10,
+      pruneNow
+    );
+    assert.equal(
+      coordinator.tryAcquire(waiter, 5_000, pruneNow),
+      null,
+      "cleanup must never release a quarantined ambiguous submission"
+    );
+    coordinator.cancel(waiter);
+  } finally {
+    owner.close();
+    coordinator.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("expired submitting intents recover as unknown and schema contains no payload or credential fields", () => {
   const directory = mkdtempSync(join(tmpdir(), "omni-expired-video-submit-"));
   const filename = join(directory, "coordination.sqlite");
@@ -287,7 +439,10 @@ test("expired submitting intents recover as unknown and schema contains no paylo
       assert.ok(columns.includes("provider"));
       assert.ok(columns.includes("connection_id"));
       assert.ok(columns.includes("remote_task_id"));
-      assert.ok(!columns.some((name) => /prompt|credential|access_token|api_key/i.test(name)));
+      assert.ok(
+        !columns.some((name) => /^(prompt|credentials?|access_token|api_key)$/i.test(name)),
+        "the task table may store the non-secret API-key row ID, never key material"
+      );
       const stored = JSON.stringify(
         inspect.prepare("SELECT * FROM coordination_async_tasks").all()
       );
@@ -448,7 +603,7 @@ test("async task schema requires the supported shared-coordination protocol firs
   }
 });
 
-test("an old or partial async-task protocol fails before v2 task DDL", () => {
+test("an old async-task protocol fails before current task DDL", () => {
   const directory = mkdtempSync(join(tmpdir(), "omni-async-task-schema-version-"));
   const filename = join(directory, "old-protocol.sqlite");
   const coordinator = new SqliteCoordinator(filename, "old-task-schema-worker");
@@ -472,7 +627,43 @@ test("an old or partial async-task protocol fails before v2 task DDL", () => {
           )
           .get(),
         undefined,
-        "a mismatched task protocol must fail before adding v2 capacity schema"
+        "a mismatched task protocol must fail before adding current capacity schema"
+      );
+    } finally {
+      inspect.close();
+    }
+  } finally {
+    coordinator.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a partial current-version task schema is rejected before additive DDL", () => {
+  const directory = mkdtempSync(join(tmpdir(), "omni-partial-async-task-schema-"));
+  const filename = join(directory, "partial-v4.sqlite");
+  const coordinator = new SqliteCoordinator(filename, "partial-schema-worker");
+  try {
+    const partial = new DatabaseSync(filename);
+    partial.exec(
+      `CREATE TABLE coordination_async_task_protocol(version TEXT PRIMARY KEY);
+       INSERT INTO coordination_async_task_protocol VALUES ('omni-async-task-owner/v4');
+       CREATE TABLE coordination_async_tasks(id TEXT PRIMARY KEY);
+       CREATE TABLE coordination_async_task_capacity(task_id TEXT,resource TEXT,cap INTEGER);`
+    );
+    partial.close();
+
+    assert.throws(() => new SqliteAsyncTaskOwner(filename), /Partial durable async task schema/);
+    const inspect = new DatabaseSync(filename, { readOnly: true });
+    try {
+      const columns = inspect.prepare("PRAGMA table_info(coordination_async_tasks)").all();
+      assert.equal(columns.length, 1, "the rejected v4 database must remain untouched");
+      assert.equal(
+        inspect
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='coordination_async_tasks_pollable'"
+          )
+          .get(),
+        undefined
       );
     } finally {
       inspect.close();

@@ -45107,8 +45107,48 @@ paths:
       description: >-
         Uses a configured provider or video combo. The model is required; prompt
         requirements vary by the resolved provider/model and additional parameters
-        are provider-specific. Authentication is required when REQUIRE_API_KEY is
-        enabled; otherwise anonymous requests may be accepted.
+        are provider-specific. By default the route remains synchronous. Send
+        `Prefer: respond-async` to opt into durable asynchronous mode, currently
+        limited to direct Agnes Video V2.0 requests (combos and other providers are
+        rejected). Async mode requires a directly presented registered API key
+        (the environment bootstrap key, URL credentials, and a dashboard session's
+        server-selected test key are not sufficient) and
+        `Idempotency-Key`;
+        the key is scoped to that API-key record and reused with a different request
+        returns 409. The task's submission intent and selected account reservation
+        are persisted before the provider POST. A timeout or transport failure after
+        dispatch is returned as `submission_unknown` and is never automatically
+        resubmitted. A 202 task advances by one fenced poll either through its
+        status URL or a sequential maintenance-owner poller that starts after boot,
+        runs every ten seconds, and processes at most four tasks per tick. It makes
+        no provider calls during startup and does not run in generation replicas.
+        Polling can resume after process restart because the provider task id, task
+        state, and account reservation are durable. Results are copied into private OmniRoute file
+        storage, limited to 64 MiB per result and 24 hours of retention. A per-key
+        256 MiB and global 512 MiB active artifact budget also apply. Results must
+        be `video/mp4` or `application/octet-stream`. Terminal
+        idempotency metadata is retained for seven days, then removed by bounded
+        request-driven cleanup. A provider that never reports an accepted task as
+        terminal can retain provider-account capacity indefinitely. An unresolved
+        ambiguous submit remains quarantined indefinitely because this slice has no
+        provider/operator reconciliation endpoint.
+      parameters:
+        - name: Prefer
+          in: header
+          required: false
+          description: >-
+            Exact preference `respond-async` opts into durable asynchronous video
+            handling. Omit it to preserve the existing synchronous request behavior.
+          schema: { type: string, example: respond-async }
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: >-
+            Required when `Prefer: respond-async` is used. Must be 1–255 printable
+            characters. Retries with the same registered API key and identical
+            request return the existing task; using the same key for different
+            request contents returns 409.
+          schema: { type: string, minLength: 1, maxLength: 255 }
       security:
         - BearerAuth: []
         - ClientApiKeyAuth: []
@@ -45123,8 +45163,12 @@ paths:
               $ref: "#/components/schemas/VideoGenerationRequest"
       responses:
         "200":
-          description: Provider-native video result, commonly an array of video URLs or base64 artifacts.
+          description: >-
+            Provider-native synchronous result, or an existing terminal async task
+            returned for an idempotent retry. Async task replays use
+            `V1DurableVideoTask`; synchronous results use `MediaGenerationResponse`.
           headers:
+            Location: { schema: { type: string, format: uri-reference } }
             X-OmniRoute-Cache-Hit: { $ref: "#/components/headers/OmniRouteCacheHit" }
             X-OmniRoute-Decision: { $ref: "#/components/headers/OmniRouteDecision" }
             X-OmniRoute-Fallback-Attempts:
@@ -45140,7 +45184,26 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MediaGenerationResponse"
+                oneOf:
+                  - $ref: "#/components/schemas/MediaGenerationResponse"
+                  - $ref: "#/components/schemas/V1DurableVideoTask"
+        "202":
+          description: >-
+            An asynchronous Agnes task is submitting, awaiting provider completion,
+            or has an ambiguous submit outcome. Poll `status_url`; an ambiguous
+            submit is quarantined and never replayed. Caller cancellation does not
+            cancel an accepted Agnes job upstream and does not release its account
+            reservation until a terminal provider observation. After Agnes reports
+            completion, the account slot is released while the result artifact is
+            stored. If Agnes never reports a terminal state, accepted and
+            cancellation-requested tasks can hold provider-account capacity
+            indefinitely, even though the maintenance poller continues retrying.
+          headers:
+            Location: { schema: { type: string, format: uri-reference } }
+            Retry-After: { schema: { type: integer, minimum: 0 } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1DurableVideoTask" }
         "400":
           description: Invalid request, model, provider, missing credentials, or required prompt.
           content:
@@ -45166,6 +45229,11 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "409":
+          description: Idempotency key conflicts with a previously stored task or an async task cannot be safely cancelled yet.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "499":
           description: >-
             The caller cancelled a direct, cancellable video request. Accepted asynchronous
@@ -45187,6 +45255,148 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
+  /api/v1/videos/tasks/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getApiV1VideosTasksById
+      tags: [V1 Videos]
+      summary: Get and advance an asynchronous Agnes video task
+      description: >-
+        Requires the same registered API key that submitted the task. A caller
+        using another key receives 404. When the task is due, this request claims
+        a fenced poll owner and performs at most one provider status poll; repeated
+        requests before `Retry-After` do not create additional upstream requests.
+        The dedicated maintenance runtime runs a bounded sequential poller every
+        ten seconds, after startup, never in generation replicas. After a server
+        restart, a new status request or the maintenance poller can reclaim the persisted task once
+        the previous poll lease expires. `submission_unknown` cannot be polled
+        because no provider task id was confirmed, and it is never resubmitted.
+        An `artifact_pending` task already released provider-account capacity and
+        can be polled to retry result storage. Accepted, artifact-pending,
+        cancellation-requested, and unknown tasks are never removed by terminal
+        metadata cleanup. Abandoned accepted tasks may retain capacity until the
+        poller observes a terminal provider state; unknown submits remain
+        quarantined indefinitely until late confirmation or operator/provider
+        reconciliation.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+      responses:
+        "200":
+          description: The task reached a terminal state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1DurableVideoTask" }
+        "202":
+          description: The task is submitting, running, awaiting result storage, or has an ambiguous submit result.
+          headers:
+            Retry-After: { schema: { type: integer, minimum: 0 } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1DurableVideoTask" }
+        "401":
+          $ref: "#/components/responses/V1ResourceAuthenticationRequired"
+        "404":
+          description: Task does not exist or belongs to another API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/V1ResourceAuthenticationUnavailable"
+    delete:
+      operationId: deleteApiV1VideosTasksById
+      tags: [V1 Videos]
+      summary: Request cancellation of an asynchronous Agnes video task
+      description: >-
+        Cancellation is local because the Agnes integration has no confirmed
+        provider-side cancellation endpoint. Accepted tasks move to
+        `cancel_requested`; OmniRoute keeps the provider-account reservation and
+        polls until Agnes reports a terminal state. If Agnes already reported
+        completion and the task is `artifact_pending`, DELETE marks it cancelled
+        locally because no provider work remains. A task still submitting or
+        with an unknown submit outcome returns 409 because cancellation cannot be
+        confirmed safely. Repeating DELETE is idempotent.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+      responses:
+        "200":
+          description: The task is already terminal.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1DurableVideoTask" }
+        "202":
+          description: Cancellation was requested; upstream work may continue and capacity remains reserved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1DurableVideoTask" }
+        "401":
+          $ref: "#/components/responses/V1ResourceAuthenticationRequired"
+        "404":
+          description: Task does not exist or belongs to another API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "409":
+          description: Submission is still in progress or its provider outcome is unknown; task details are included for reconciliation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1DurableVideoTaskCancellationConflict" }
+        "503":
+          $ref: "#/components/responses/V1ResourceAuthenticationUnavailable"
+  /api/v1/videos/tasks/{id}/content:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getApiV1VideosTasksByIdContent
+      tags: [V1 Videos]
+      summary: Retrieve a completed asynchronous video result
+      description: >-
+        Streams the provider result copied into private OmniRoute file storage as
+        `video/mp4` or `application/octet-stream`. The
+        caller must use the same registered API key that created the task. Results
+        are bounded to 64 MiB per task and are retained for 24 hours; expired data
+        is deleted from the file record and returns 410.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+      responses:
+        "200":
+          description: Generated video bytes.
+          content:
+            video/mp4:
+              schema: { type: string, format: binary }
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "401":
+          $ref: "#/components/responses/V1ResourceAuthenticationRequired"
+        "404":
+          description: Task or result is not found or belongs to another API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "409":
+          description: Task has not successfully completed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "410":
+          description: The private video result has expired.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/V1ResourceAuthenticationUnavailable"
   /api/v1/vscode/{token}:
     parameters:
       - name: token
@@ -57807,6 +58017,72 @@ components:
             when routing to Vertex Veo and is clamped to that provider's supported maximum.
         negative_prompt: { type: string }
       additionalProperties: true
+
+    V1DurableVideoTask:
+      type: object
+      description: >-
+        Persisted status for an opt-in direct Agnes video task. The provider task id
+        and account reservation survive process restart. Status reads drive one
+        fenced poll when due; the maintenance owner also runs a bounded sequential
+        poller every ten seconds. A provider-terminal task can remain
+        `artifact_pending` while result storage retries, after its account capacity
+        has been released. Result content is private, owner-scoped, limited to 64
+        MiB, and retained for 24 hours. Terminal
+        task metadata and idempotency hashes are retained for seven days before
+        bounded request-driven cleanup. Submitting, accepted, artifact-pending,
+        cancellation-requested, and unknown task rows are not pruned as terminal.
+        Unknown submits remain quarantined indefinitely until late acceptance or
+        operator/provider reconciliation; they are never automatically resubmitted.
+      required: [id, object, status, provider, model, created_at, updated_at, deadline_at, status_url, result_available]
+      properties:
+        id: { type: string, format: uuid }
+        object: { type: string, const: video.task }
+        status:
+          type: string
+          enum: [submitting, accepted, artifact_pending, cancel_requested, submission_unknown, succeeded, failed, cancelled, rejected]
+        provider: { type: string, const: agnes }
+        model: { type: string }
+        created_at: { type: integer, minimum: 0, description: Unix timestamp in seconds. }
+        updated_at: { type: integer, minimum: 0, description: Unix timestamp in seconds. }
+        deadline_at:
+          type: integer
+          minimum: 0
+          description: >-
+            Submission deadline in Unix seconds. If an accepted task is still
+            active when it expires, OmniRoute requests local cancellation and
+            retains its account slot until a terminal provider observation.
+        status_url: { type: string, format: uri-reference }
+        result_url: { type: string, format: uri-reference }
+        result_expires_at: { type: integer, minimum: 0, description: Unix timestamp in seconds. }
+        result_available: { type: boolean }
+        error:
+          type: object
+          properties:
+            code: { type: string }
+          additionalProperties: false
+        cancellation:
+          type: object
+          description: Local cancellation request; it does not cancel the Agnes job upstream.
+          properties:
+            requested: { type: boolean, const: true }
+            upstream_cancelled: { type: boolean, const: false }
+            reason: { type: string }
+          additionalProperties: false
+      additionalProperties: false
+
+    V1DurableVideoTaskCancellationConflict:
+      type: object
+      required: [error, task]
+      properties:
+        error:
+          type: object
+          required: [message, type]
+          properties:
+            message: { type: string }
+            type: { type: string, const: conflict_error }
+          additionalProperties: false
+        task: { $ref: "#/components/schemas/V1DurableVideoTask" }
+      additionalProperties: false
 
     MediaGenerationResponse:
       type: object

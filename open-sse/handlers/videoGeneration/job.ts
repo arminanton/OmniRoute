@@ -208,6 +208,144 @@ export function getVideoJobPreset(presetName: unknown): VideoJobPreset | null {
   return preset ?? null;
 }
 
+export type VideoJobSubmitOutcome =
+  | { kind: "accepted"; remoteTaskId: string }
+  | { kind: "rejected"; status: number; errorCode: string }
+  | { kind: "unknown"; errorCode: string };
+
+/** Submit one async provider job without polling or replaying a POST. */
+export async function submitVideoJobOnce({
+  model,
+  presetName,
+  body,
+  credentials,
+  log,
+  deadlineAt,
+  callerSignal,
+}: {
+  model: string;
+  presetName: string;
+  body: Record<string, unknown>;
+  credentials?: unknown;
+  log?: LogLike;
+  deadlineAt: number;
+  callerSignal?: AbortSignal | null;
+}): Promise<VideoJobSubmitOutcome> {
+  const preset = getVideoJobPreset(presetName);
+  if (!preset) return { kind: "rejected", status: 400, errorCode: "unknown_job_preset" };
+  if (callerSignal?.aborted)
+    return { kind: "rejected", status: 499, errorCode: "cancelled_before_submit" };
+
+  const bodyForPreset = preset.submit.buildBody({
+    model,
+    prompt: typeof body.prompt === "string" ? body.prompt : undefined,
+    duration: typeof body.duration === "number" ? body.duration : undefined,
+    extras: Object.fromEntries(
+      Object.entries(body).filter(
+        ([key]) => !["model", "prompt", "duration", "timeout_ms", "poll_interval_ms"].includes(key)
+      )
+    ),
+  });
+  const url = `${resolveJobBaseUrl(credentials, preset.baseUrlFallback)}${preset.submit.path.replace(
+    "{model}",
+    encodeURIComponent(model)
+  )}`;
+  const result = await fetchJson(url, {
+    method: preset.submit.method,
+    headers: buildJobHeaders(preset, credentials),
+    body: JSON.stringify(bodyForPreset),
+    log,
+    deadlineAt,
+    callerSignal,
+    honorCallerAbort: true,
+  });
+  if (result.ok === false) {
+    // Only an actual provider 4xx response other than timeout/caller-abort
+    // proves the POST was rejected. Transport and server failures stay fenced
+    // as unknown because acceptance may have happened before the failure.
+    if (
+      result.status >= 400 &&
+      result.status < 500 &&
+      result.status !== 408 &&
+      result.status !== 499
+    ) {
+      return {
+        kind: "rejected",
+        status: result.status,
+        errorCode: `provider_http_${result.status}`,
+      };
+    }
+    return {
+      kind: "unknown",
+      errorCode:
+        result.status === 499
+          ? "caller_disconnected_during_submit"
+          : `submit_http_${result.status}`,
+    };
+  }
+
+  const remoteTaskId = readStringPath(result.data, preset.taskIdPath);
+  if (!remoteTaskId) return { kind: "unknown", errorCode: "provider_missing_task_id" };
+  return { kind: "accepted", remoteTaskId };
+}
+
+export type VideoJobPollOutcome =
+  | { kind: "pending" }
+  | { kind: "completed"; resultUrl: string }
+  | { kind: "failed"; errorCode: string }
+  | { kind: "retry"; errorCode: string };
+
+/** Observe one poll of a persisted provider task; this GET is safe to retry. */
+export async function pollVideoJobOnce({
+  model,
+  presetName,
+  remoteTaskId,
+  credentials,
+  log,
+  timeoutMs = 30_000,
+  signal,
+}: {
+  model: string;
+  presetName: string;
+  remoteTaskId: string;
+  credentials?: unknown;
+  log?: LogLike;
+  timeoutMs?: number;
+  signal?: AbortSignal | null;
+}): Promise<VideoJobPollOutcome> {
+  const preset = getVideoJobPreset(presetName);
+  if (!preset) return { kind: "failed", errorCode: "unknown_job_preset" };
+  const baseUrl = resolveJobBaseUrl(credentials, preset.baseUrlFallback);
+  const pollUrl = `${baseUrl}${preset.poll.pathTemplate.replace(
+    "{taskId}",
+    encodeURIComponent(remoteTaskId)
+  )}`;
+  const result = await fetchJson(pollUrl, {
+    method: "GET",
+    headers: buildJobHeaders(preset, credentials),
+    log,
+    deadlineAt: Date.now() + Math.max(1, Math.min(timeoutMs, MAX_VIDEO_JOB_FETCH_TIMEOUT_MS)),
+    callerSignal: signal,
+    honorCallerAbort: true,
+  });
+  if (result.ok === false) {
+    // A poll error does not prove the remote task stopped. Keep its account
+    // reservation until the provider returns an explicit terminal task state.
+    return { kind: "retry", errorCode: `provider_poll_http_${result.status}` };
+  }
+  const state = isDoneStatus(
+    readPath(result.data, preset.statusPath),
+    preset.statusDone,
+    preset.statusFailed
+  );
+  if (state === "failed") return { kind: "failed", errorCode: "provider_task_failed" };
+  if (state === "pending") return { kind: "pending" };
+  const resultUrl = readResultUrl(result.data, preset.resultPath);
+  return resultUrl
+    ? { kind: "completed", resultUrl }
+    : { kind: "failed", errorCode: "provider_result_url_missing" };
+}
+
 /**
  * Handle a video-generation job via the submit→poll preset pipeline.
  * Returns the same shape as the sync handlers: { success, data?: …, status?, error? }.

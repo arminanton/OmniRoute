@@ -16,6 +16,8 @@ import {
   createKeySchema,
   updateKeyPermissionsSchema,
 } from "../../src/shared/validation/schemas.ts";
+import { createApiKey } from "../../src/lib/db/apiKeys.ts";
+import { getApiKeyRequestScope } from "../../src/app/api/v1/_helpers/apiKeyScope.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -45,6 +47,35 @@ test("api key validation accepts more than sixteen scopes", () => {
 
   assert.equal(createKeySchema.safeParse({ name: "heavy-scope-key", scopes }).success, true);
   assert.equal(updateKeyPermissionsSchema.safeParse({ scopes }).success, true);
+});
+
+test("durable task scope accepts registered x-api-key headers without URL credentials", async () => {
+  const previousSecret = process.env.API_KEY_SECRET;
+  process.env.API_KEY_SECRET = "durable-video-api-key-test-secret";
+  try {
+    const key = await createApiKey("durable-video-client", "0123456789abcdef");
+    const headerScope = await getApiKeyRequestScope(
+      new Request("https://omni.example/api/v1/videos/tasks/task-id", {
+        headers: { "x-api-key": key.key },
+      }),
+      { requireAuthenticated: true, allowUrl: false, allowClientApiKeyHeader: true }
+    );
+    assert.equal(headerScope.apiKeyId, key.id);
+    assert.equal(headerScope.apiKey, key.key);
+    assert.equal(headerScope.rejection, null);
+
+    const urlScope = await getApiKeyRequestScope(
+      new Request(
+        `https://omni.example/api/v1/videos/tasks/task-id?api_key=${encodeURIComponent(key.key)}`
+      ),
+      { requireAuthenticated: true, allowUrl: false, allowClientApiKeyHeader: true }
+    );
+    assert.equal(urlScope.apiKeyId, null);
+    assert.ok(urlScope.rejection);
+  } finally {
+    if (previousSecret === undefined) delete process.env.API_KEY_SECRET;
+    else process.env.API_KEY_SECRET = previousSecret;
+  }
 });
 
 test("lease scope requires an explicit non-empty connection allowlist", () => {

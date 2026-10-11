@@ -1,6 +1,16 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert";
-import { createFile, listFiles, deleteFile, getFile } from "@/lib/db/files";
+import {
+  createFile,
+  listFiles,
+  deleteFile,
+  getFile,
+  getFileContent,
+  createVideoTaskArtifact,
+  findVideoTaskArtifact,
+  deleteExpiredVideoTaskArtifacts,
+  VIDEO_TASK_ARTIFACT_RETENTION_SECONDS,
+} from "@/lib/db/files";
 
 describe("Files API - Integration Tests", () => {
   afterEach(() => {
@@ -10,6 +20,46 @@ describe("Files API - Integration Tests", () => {
         deleteFile(f.id);
       }
     }
+  });
+
+  describe("durable video task artifacts", () => {
+    it("uses a task-stable private file and applies bounded retention", () => {
+      const now = 2_000_000_000;
+      const first = createVideoTaskArtifact({
+        taskId: "durable-video-task-test",
+        apiKeyId: "api-key-video-test",
+        content: Buffer.from("video bytes"),
+        mimeType: "video/mp4",
+        now,
+      });
+      const retry = createVideoTaskArtifact({
+        taskId: "durable-video-task-test",
+        apiKeyId: "api-key-video-test",
+        content: Buffer.from("different retry bytes"),
+        mimeType: "video/mp4",
+        now: now + 1,
+      });
+
+      assert.equal(first.id, retry.id);
+      assert.equal(first.expiresAt, now + VIDEO_TASK_ARTIFACT_RETENTION_SECONDS);
+      assert.equal(retry.bytes, first.bytes, "retry reuses the already persisted task artifact");
+      assert.equal(
+        findVideoTaskArtifact("durable-video-task-test", "other-api-key", now + 2),
+        null
+      );
+      assert.equal(
+        getFileContent(first.id)?.toString("utf8"),
+        "video bytes",
+        "an interrupted success transition can safely reattach the existing artifact"
+      );
+
+      assert.equal(deleteExpiredVideoTaskArtifacts(first.expiresAt!, 8), 1);
+      assert.equal(getFile(first.id), null);
+      assert.equal(
+        findVideoTaskArtifact("durable-video-task-test", "api-key-video-test", first.expiresAt!),
+        null
+      );
+    });
   });
 
   describe("POST /v1/files - File creation with auto-expiration", () => {

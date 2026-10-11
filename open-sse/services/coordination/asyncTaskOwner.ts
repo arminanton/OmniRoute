@@ -3,11 +3,15 @@ import { DatabaseSync } from "node:sqlite";
 import { COORDINATION_PROTOCOL } from "./sqliteCoordinator.ts";
 
 /** Additive schema protocol for durable provider tasks stored beside admission state. */
-export const ASYNC_TASK_OWNER_PROTOCOL = "omni-async-task-owner/v2";
+export const ASYNC_TASK_OWNER_PROTOCOL = "omni-async-task-owner/v4";
+export const ASYNC_TASK_TERMINAL_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_TERMINAL_TASK_PRUNE_PER_CALL = 100;
 
 export type DurableAsyncTaskState =
   | "submitting"
   | "accepted"
+  | "artifact_pending"
+  | "cancel_requested"
   | "submission_unknown"
   | "succeeded"
   | "failed"
@@ -26,6 +30,8 @@ export interface DurableAsyncTaskCapacity {
 }
 
 export interface CreateDurableAsyncTaskInput {
+  /** Non-secret API-key row ID used by the maintenance poller for artifact ownership. */
+  apiKeyId: string;
   provider: string;
   model: string;
   connectionId?: string | null;
@@ -34,6 +40,8 @@ export interface CreateDurableAsyncTaskInput {
   /** Stable client idempotency scope/key. Only SHA-256 digests are persisted. */
   idempotencyScope: string;
   idempotencyKey: string;
+  /** Caller-keyed digest of canonical request and routing identity; prompts are never persisted. */
+  requestFingerprint: string;
   /** Absolute UTC epoch milliseconds. Expired submit intents become unknown, never replayed. */
   deadlineAt: number;
   capacity: readonly DurableAsyncTaskCapacity[];
@@ -41,6 +49,7 @@ export interface CreateDurableAsyncTaskInput {
 
 export interface DurableAsyncTaskRecord {
   id: string;
+  apiKeyId: string;
   state: DurableAsyncTaskState;
   provider: string;
   model: string;
@@ -54,6 +63,8 @@ export interface DurableAsyncTaskRecord {
   nextPollAt: number;
   terminalAt: number | null;
   errorCode: string | null;
+  artifactFileId: string | null;
+  artifactExpiresAt: number | null;
 }
 
 export interface DurableAsyncTaskPollClaim {
@@ -78,8 +89,8 @@ const MAX_CAPACITY_RESOURCES = 8;
  * Durable metadata and provider-account occupancy for accepted asynchronous jobs.
  *
  * This class deliberately owns no network operations: once a caller receives an
- * existing task, it must not submit again. Only accepted jobs can be claimed for
- * polling. A `submitting` row whose deadline expires is changed to
+ * existing task, it must not submit again. Accepted jobs and completed jobs
+ * awaiting result storage can be claimed for polling. A `submitting` row whose deadline expires is changed to
  * `submission_unknown`, retaining its capacity reservation for explicit
  * provider/operator reconciliation. An unknown task is not released based on a
  * generic "not found" lookup: a provider-specific resolver needs a guarantee
@@ -109,9 +120,10 @@ export class SqliteAsyncTaskOwner {
         CREATE TABLE IF NOT EXISTS coordination_async_tasks (
           id TEXT PRIMARY KEY,
           state TEXT NOT NULL CHECK (state IN (
-            'submitting','accepted','submission_unknown','succeeded','failed','cancelled','rejected'
+            'submitting','accepted','artifact_pending','cancel_requested','submission_unknown','succeeded','failed','cancelled','rejected'
           )),
           provider TEXT NOT NULL,
+          api_key_id TEXT NOT NULL,
           model TEXT NOT NULL,
           connection_id TEXT,
           remote_task_id TEXT,
@@ -119,6 +131,7 @@ export class SqliteAsyncTaskOwner {
           strategy_version TEXT NOT NULL,
           idempotency_scope_hash TEXT NOT NULL,
           idempotency_key_hash TEXT NOT NULL,
+          request_fingerprint_hash TEXT NOT NULL,
           submission_fence INTEGER NOT NULL,
           deadline_at INTEGER NOT NULL,
           created_at INTEGER NOT NULL,
@@ -129,6 +142,8 @@ export class SqliteAsyncTaskOwner {
           poll_lease_until INTEGER,
           terminal_at INTEGER,
           error_code TEXT,
+          artifact_file_id TEXT,
+          artifact_expires_at INTEGER,
           UNIQUE (idempotency_scope_hash, idempotency_key_hash)
         );
         CREATE TABLE IF NOT EXISTS coordination_async_task_capacity (
@@ -141,6 +156,8 @@ export class SqliteAsyncTaskOwner {
           ON coordination_async_tasks(state, next_poll_at, poll_lease_until);
         CREATE INDEX IF NOT EXISTS coordination_async_tasks_deadline
           ON coordination_async_tasks(state, deadline_at);
+        CREATE INDEX IF NOT EXISTS coordination_async_tasks_terminal
+          ON coordination_async_tasks(state, terminal_at);
       `);
 
       const versions = this.db
@@ -202,6 +219,59 @@ export class SqliteAsyncTaskOwner {
     if (versions.length !== 1 || versions[0].version !== ASYNC_TASK_OWNER_PROTOCOL) {
       throw new Error("Incompatible durable async task owner protocol");
     }
+    if (
+      existing.size !== 3 ||
+      !existing.has("coordination_async_tasks") ||
+      !existing.has("coordination_async_task_capacity")
+    ) {
+      throw new Error("Partial durable async task schema");
+    }
+    const taskColumns = new Set(
+      (
+        this.db.prepare("PRAGMA table_info(coordination_async_tasks)").all() as Array<{
+          name: string;
+        }>
+      ).map((row) => row.name)
+    );
+    const requiredTaskColumns = [
+      "id",
+      "state",
+      "provider",
+      "api_key_id",
+      "model",
+      "connection_id",
+      "remote_task_id",
+      "strategy",
+      "strategy_version",
+      "idempotency_scope_hash",
+      "idempotency_key_hash",
+      "request_fingerprint_hash",
+      "submission_fence",
+      "deadline_at",
+      "created_at",
+      "updated_at",
+      "next_poll_at",
+      "poll_owner",
+      "poll_fence",
+      "poll_lease_until",
+      "terminal_at",
+      "error_code",
+      "artifact_file_id",
+      "artifact_expires_at",
+    ];
+    if (requiredTaskColumns.some((name) => !taskColumns.has(name))) {
+      throw new Error("Partial durable async task schema");
+    }
+    const capacityColumns = new Set(
+      (
+        this.db.prepare("PRAGMA table_info(coordination_async_task_capacity)").all() as Array<{
+          name: string;
+        }>
+      ).map((row) => row.name)
+    );
+    if (!["task_id", "resource", "cap"].every((name) => capacityColumns.has(name))) {
+      throw new Error("Partial durable async task schema");
+    }
   }
 
   private atomic<T>(operation: () => T): T {
@@ -228,6 +298,7 @@ export class SqliteAsyncTaskOwner {
     const normalized = validateCreateInput(input, now);
     const scopeHash = digest(input.idempotencyScope);
     const keyHash = digest(input.idempotencyKey);
+    const requestFingerprintHash = digest(input.requestFingerprint);
 
     return this.atomic(() => {
       this.pruneExpiredWorkerResources(now);
@@ -241,10 +312,12 @@ export class SqliteAsyncTaskOwner {
       if (decodedExisting) {
         if (
           decodedExisting.provider !== input.provider ||
+          decodedExisting.api_key_id !== input.apiKeyId ||
           decodedExisting.model !== input.model ||
           decodedExisting.connection_id !== (input.connectionId?.trim() || null) ||
           decodedExisting.strategy !== input.strategy ||
           decodedExisting.strategy_version !== input.strategyVersion ||
+          decodedExisting.request_fingerprint_hash !== requestFingerprintHash ||
           !this.matchesCapacitySnapshot(decodedExisting.id, normalized)
         ) {
           throw new Error("idempotency_key_conflict");
@@ -296,21 +369,23 @@ export class SqliteAsyncTaskOwner {
       this.db
         .prepare(
           `INSERT INTO coordination_async_tasks (
-             id,state,provider,model,connection_id,remote_task_id,strategy,strategy_version,
-             idempotency_scope_hash,idempotency_key_hash,submission_fence,deadline_at,
+             id,state,provider,api_key_id,model,connection_id,remote_task_id,strategy,strategy_version,
+             idempotency_scope_hash,idempotency_key_hash,request_fingerprint_hash,submission_fence,deadline_at,
              created_at,updated_at,next_poll_at
-           ) VALUES (?,?,?,?,?,NULL,?,?,?,?,?,?,?,?,0)`
+           ) VALUES (?,?,?,?,?,?,NULL,?,?,?,?,?,?,?,?,?,0)`
         )
         .run(
           id,
           "submitting",
           input.provider,
+          input.apiKeyId,
           input.model,
           input.connectionId?.trim() || null,
           input.strategy,
           input.strategyVersion,
           scopeHash,
           keyHash,
+          requestFingerprintHash,
           submissionFence,
           input.deadlineAt,
           now,
@@ -333,6 +408,39 @@ export class SqliteAsyncTaskOwner {
     });
   }
 
+  /** Look up a retry before selecting an account, so a retry stays pinned to its original account. */
+  findSubmission(input: {
+    apiKeyId: string;
+    provider: string;
+    model: string;
+    strategy: string;
+    strategyVersion: string;
+    idempotencyScope: string;
+    idempotencyKey: string;
+    requestFingerprint: string;
+  }): DurableAsyncTaskRecord | null {
+    validateIdempotencyLookup(input);
+    const row = this.db
+      .prepare(
+        `SELECT ${TASK_COLUMNS} FROM coordination_async_tasks
+         WHERE idempotency_scope_hash=? AND idempotency_key_hash=?`
+      )
+      .get(digest(input.idempotencyScope), digest(input.idempotencyKey));
+    if (row === undefined) return null;
+    const decoded = decodeTaskDbRow(row);
+    if (
+      decoded.provider !== input.provider ||
+      decoded.api_key_id !== input.apiKeyId ||
+      decoded.model !== input.model ||
+      decoded.strategy !== input.strategy ||
+      decoded.strategy_version !== input.strategyVersion ||
+      decoded.request_fingerprint_hash !== digest(input.requestFingerprint)
+    ) {
+      throw new Error("idempotency_key_conflict");
+    }
+    return toTaskRecord(decoded);
+  }
+
   /** Persist provider acceptance. This is the only normal transition that stores a remote id. */
   recordAccepted(
     taskId: string,
@@ -347,8 +455,9 @@ export class SqliteAsyncTaskOwner {
         this.db
           .prepare(
             `UPDATE coordination_async_tasks
-             SET state='accepted',remote_task_id=?,updated_at=?,next_poll_at=?,error_code=NULL
-             WHERE id=? AND state IN ('submitting','submission_unknown') AND submission_fence=?`
+             SET state=CASE WHEN state='cancel_requested' THEN state ELSE 'accepted' END,
+                 remote_task_id=?,updated_at=?,next_poll_at=?,error_code=NULL
+             WHERE id=? AND state IN ('submitting','submission_unknown','cancel_requested') AND submission_fence=?`
           )
           .run(remoteId, now, now, taskId, submissionFence).changes
       ) === 1
@@ -379,7 +488,7 @@ export class SqliteAsyncTaskOwner {
       const changed = this.db
         .prepare(
           `UPDATE coordination_async_tasks SET state='rejected',terminal_at=?,updated_at=?,error_code=?
-           WHERE id=? AND state IN ('submitting','submission_unknown') AND submission_fence=?`
+           WHERE id=? AND state IN ('submitting','submission_unknown','cancel_requested') AND submission_fence=?`
         )
         .run(now, now, safeErrorCode, taskId, submissionFence).changes;
       if (Number(changed) !== 1) return false;
@@ -410,7 +519,39 @@ export class SqliteAsyncTaskOwner {
     });
   }
 
-  /** Bounded restart discovery; callers must acquire a fenced poll claim before network I/O. */
+  /** Bounded cleanup of terminal idempotency records; active/unknown tasks are never pruned. */
+  pruneExpiredTerminalTasks(now = Date.now(), limit = MAX_TERMINAL_TASK_PRUNE_PER_CALL): number {
+    validateNow(now);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_TERMINAL_TASK_PRUNE_PER_CALL) {
+      throw new Error("invalid_task_prune_limit");
+    }
+    const terminalBefore = now - ASYNC_TASK_TERMINAL_RETENTION_MS;
+    if (terminalBefore < 0) return 0;
+    return this.atomic(() => {
+      const rows = this.db
+        .prepare(
+          `SELECT id FROM coordination_async_tasks
+           WHERE state IN ('succeeded','failed','cancelled','rejected') AND terminal_at<=?
+           ORDER BY terminal_at ASC LIMIT ?`
+        )
+        .all(terminalBefore, limit) as Array<{ id: string }>;
+      const deleteCapacity = this.db.prepare(
+        "DELETE FROM coordination_async_task_capacity WHERE task_id=?"
+      );
+      const deleteTask = this.db.prepare(
+        `DELETE FROM coordination_async_tasks WHERE id=?
+         AND state IN ('succeeded','failed','cancelled','rejected') AND terminal_at<=?`
+      );
+      let deleted = 0;
+      for (const row of rows) {
+        deleteCapacity.run(row.id);
+        deleted += Number(deleteTask.run(row.id, terminalBefore).changes);
+      }
+      return deleted;
+    });
+  }
+
+  /** Bounded discovery; callers must acquire a fenced poll claim before network I/O. */
   listDueAcceptedTasks(now = Date.now(), limit = 50): DurableAsyncTaskRecord[] {
     if (!Number.isSafeInteger(now) || now < 0) throw new Error("invalid_task_list_time");
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
@@ -419,7 +560,7 @@ export class SqliteAsyncTaskOwner {
     const rows = this.db
       .prepare(
         `SELECT ${TASK_COLUMNS} FROM coordination_async_tasks
-         WHERE state='accepted' AND remote_task_id IS NOT NULL AND next_poll_at<=?
+         WHERE state IN ('accepted','artifact_pending','cancel_requested') AND remote_task_id IS NOT NULL AND next_poll_at<=?
          AND (poll_lease_until IS NULL OR poll_lease_until<=?)
          ORDER BY next_poll_at ASC,created_at ASC LIMIT ?`
       )
@@ -442,7 +583,7 @@ export class SqliteAsyncTaskOwner {
       const rawRow = this.db
         .prepare(
           `SELECT ${TASK_COLUMNS},poll_lease_until FROM coordination_async_tasks
-           WHERE id=? AND state='accepted' AND remote_task_id IS NOT NULL AND next_poll_at<=?`
+           WHERE id=? AND state IN ('accepted','artifact_pending','cancel_requested') AND remote_task_id IS NOT NULL AND next_poll_at<=?`
         )
         .get(taskId, now);
       const row = rawRow === undefined ? undefined : decodeTaskDbRow(rawRow, true);
@@ -454,7 +595,7 @@ export class SqliteAsyncTaskOwner {
       const changed = this.db
         .prepare(
           `UPDATE coordination_async_tasks SET poll_owner=?,poll_fence=?,poll_lease_until=?,updated_at=?
-           WHERE id=? AND state='accepted' AND (poll_lease_until IS NULL OR poll_lease_until<=?)`
+           WHERE id=? AND state IN ('accepted','artifact_pending','cancel_requested') AND (poll_lease_until IS NULL OR poll_lease_until<=?)`
         )
         .run(owner, fence, expiresAt, now, taskId, now).changes;
       if (Number(changed) !== 1) return null;
@@ -475,7 +616,7 @@ export class SqliteAsyncTaskOwner {
         this.db
           .prepare(
             `UPDATE coordination_async_tasks SET poll_lease_until=?,updated_at=?
-             WHERE id=? AND state='accepted' AND poll_owner=? AND poll_fence=? AND poll_lease_until>?`
+           WHERE id=? AND state IN ('accepted','artifact_pending','cancel_requested') AND poll_owner=? AND poll_fence=? AND poll_lease_until>?`
           )
           .run(expiresAt, now, claim.task.id, claim.owner, claim.fence, now).changes
       ) === 1
@@ -496,17 +637,33 @@ export class SqliteAsyncTaskOwner {
           .prepare(
             `UPDATE coordination_async_tasks SET next_poll_at=?,poll_owner=NULL,poll_fence=NULL,
              poll_lease_until=NULL,updated_at=?
-             WHERE id=? AND state='accepted' AND poll_owner=? AND poll_fence=? AND poll_lease_until>?`
+             WHERE id=? AND state IN ('accepted','artifact_pending','cancel_requested') AND poll_owner=? AND poll_fence=? AND poll_lease_until>?`
           )
           .run(nextPollAt, now, claim.task.id, claim.owner, claim.fence, now).changes
       ) === 1
     );
   }
 
+  /** A provider-terminal job no longer occupies its provider account while its result is stored. */
+  markArtifactPending(claim: DurableAsyncTaskPollClaim, now = Date.now()): boolean {
+    validatePollClaim(claim, now);
+    return this.atomic(() => {
+      const changed = this.db
+        .prepare(
+          `UPDATE coordination_async_tasks SET state='artifact_pending',updated_at=?
+           WHERE id=? AND state='accepted' AND poll_owner=? AND poll_fence=? AND poll_lease_until>?`
+        )
+        .run(now, claim.task.id, claim.owner, claim.fence, now).changes;
+      if (Number(changed) !== 1) return false;
+      this.deleteTaskResources(claim.task.id);
+      return true;
+    });
+  }
+
   /** Terminal completion and capacity release are one fenced transaction. */
   finishPollTask(
     claim: DurableAsyncTaskPollClaim,
-    state: Exclude<DurableAsyncTaskTerminalState, "rejected">,
+    state: Exclude<DurableAsyncTaskTerminalState, "rejected" | "succeeded">,
     errorCode?: string,
     now = Date.now()
   ): boolean {
@@ -520,12 +677,96 @@ export class SqliteAsyncTaskOwner {
         .prepare(
           `UPDATE coordination_async_tasks SET state=?,terminal_at=?,updated_at=?,error_code=?,
            poll_owner=NULL,poll_fence=NULL,poll_lease_until=NULL
-           WHERE id=? AND state='accepted' AND poll_owner=? AND poll_fence=? AND poll_lease_until>?`
+           WHERE id=? AND state IN ('accepted','artifact_pending','cancel_requested') AND poll_owner=? AND poll_fence=? AND poll_lease_until>?
+           AND (state!='cancel_requested' OR ?='cancelled')`
         )
-        .run(state, now, now, safeErrorCode, claim.task.id, claim.owner, claim.fence, now).changes;
+        .run(
+          state,
+          now,
+          now,
+          safeErrorCode,
+          claim.task.id,
+          claim.owner,
+          claim.fence,
+          now,
+          state
+        ).changes;
       if (Number(changed) !== 1) return false;
       this.deleteTaskResources(claim.task.id);
       return true;
+    });
+  }
+
+  /** Successful task state is committed only after a private artifact is durable. */
+  finishPollTaskWithArtifact(
+    claim: DurableAsyncTaskPollClaim,
+    artifactFileId: string,
+    artifactExpiresAt: number,
+    now = Date.now()
+  ): boolean {
+    validatePollClaim(claim, now);
+    if (typeof artifactFileId !== "string" || !/^file-[A-Za-z0-9-]{1,128}$/.test(artifactFileId)) {
+      throw new Error("invalid_task_artifact_id");
+    }
+    validateSafeTimestamp(artifactExpiresAt, "invalid_task_artifact_expiry");
+    if (artifactExpiresAt <= now) throw new Error("invalid_task_artifact_expiry");
+    return this.atomic(() => {
+      const changed = this.db
+        .prepare(
+          `UPDATE coordination_async_tasks SET state='succeeded',terminal_at=?,updated_at=?,error_code=NULL,
+           artifact_file_id=?,artifact_expires_at=?,poll_owner=NULL,poll_fence=NULL,poll_lease_until=NULL
+             WHERE id=? AND state='artifact_pending' AND poll_owner=? AND poll_fence=? AND poll_lease_until>?`
+        )
+        .run(
+          now,
+          now,
+          artifactFileId,
+          artifactExpiresAt,
+          claim.task.id,
+          claim.owner,
+          claim.fence,
+          now
+        ).changes;
+      if (Number(changed) !== 1) return false;
+      this.deleteTaskResources(claim.task.id);
+      return true;
+    });
+  }
+
+  /** Agnes has no remote cancel endpoint; accepted work keeps capacity until a terminal poll. */
+  requestCancellation(
+    taskId: string,
+    idempotencyScope: string,
+    errorCode = "caller_cancelled",
+    now = Date.now()
+  ): DurableAsyncTaskRecord | null {
+    validateTaskId(taskId);
+    if (typeof idempotencyScope !== "string" || !idempotencyScope.trim()) {
+      throw new Error("invalid_idempotency_scope");
+    }
+    validateNow(now);
+    const safeErrorCode = validateErrorCode(errorCode);
+    return this.atomic(() => {
+      const scopeHash = digest(idempotencyScope);
+      this.db
+        .prepare(
+          `UPDATE coordination_async_tasks SET state='cancelled',terminal_at=?,updated_at=?,error_code=?,
+           poll_owner=NULL,poll_fence=NULL,poll_lease_until=NULL
+           WHERE id=? AND idempotency_scope_hash=? AND state='artifact_pending'`
+        )
+        .run(now, now, safeErrorCode, taskId, scopeHash);
+      this.db
+        .prepare(
+          `UPDATE coordination_async_tasks SET state='cancel_requested',updated_at=?,error_code=?
+           WHERE id=? AND idempotency_scope_hash=? AND state='accepted'`
+        )
+        .run(now, safeErrorCode, taskId, scopeHash);
+      const row = this.db
+        .prepare(
+          `SELECT ${TASK_COLUMNS} FROM coordination_async_tasks WHERE id=? AND idempotency_scope_hash=?`
+        )
+        .get(taskId, scopeHash);
+      return row === undefined ? null : toTaskRecord(decodeTaskDbRow(row));
     });
   }
 
@@ -534,6 +775,19 @@ export class SqliteAsyncTaskOwner {
     const row = this.db
       .prepare(`SELECT ${TASK_COLUMNS} FROM coordination_async_tasks WHERE id=?`)
       .get(taskId);
+    return row === undefined ? null : toTaskRecord(decodeTaskDbRow(row));
+  }
+
+  getTaskForScope(taskId: string, idempotencyScope: string): DurableAsyncTaskRecord | null {
+    validateTaskId(taskId);
+    if (typeof idempotencyScope !== "string" || !idempotencyScope.trim()) {
+      throw new Error("invalid_idempotency_scope");
+    }
+    const row = this.db
+      .prepare(
+        `SELECT ${TASK_COLUMNS} FROM coordination_async_tasks WHERE id=? AND idempotency_scope_hash=?`
+      )
+      .get(taskId, digest(idempotencyScope));
     return row === undefined ? null : toTaskRecord(decodeTaskDbRow(row));
   }
 
@@ -619,13 +873,14 @@ export class SqliteAsyncTaskOwner {
 }
 
 const TASK_COLUMNS =
-  "id,state,provider,model,connection_id,remote_task_id,strategy,strategy_version,deadline_at,created_at,updated_at,next_poll_at,terminal_at,error_code,submission_fence";
-const POLL_TERMINAL_STATES = new Set(["succeeded", "failed", "cancelled"]);
+  "id,state,provider,api_key_id,model,connection_id,remote_task_id,strategy,strategy_version,deadline_at,created_at,updated_at,next_poll_at,terminal_at,error_code,submission_fence,request_fingerprint_hash,artifact_file_id,artifact_expires_at";
+const POLL_TERMINAL_STATES = new Set(["failed", "cancelled"]);
 
 interface TaskDbRow {
   id: string;
   state: DurableAsyncTaskState;
   provider: string;
+  api_key_id: string;
   model: string;
   connection_id: string | null;
   remote_task_id: string | null;
@@ -638,6 +893,9 @@ interface TaskDbRow {
   terminal_at: number | null;
   error_code: string | null;
   submission_fence: number;
+  request_fingerprint_hash: string;
+  artifact_file_id: string | null;
+  artifact_expires_at: number | null;
 }
 
 interface TaskPollDbRow extends TaskDbRow {
@@ -647,6 +905,8 @@ interface TaskPollDbRow extends TaskDbRow {
 const TASK_STATES = new Set<DurableAsyncTaskState>([
   "submitting",
   "accepted",
+  "artifact_pending",
+  "cancel_requested",
   "submission_unknown",
   "succeeded",
   "failed",
@@ -669,6 +929,7 @@ function decodeTaskDbRow(value: unknown, includePollLease = false): TaskDbRow | 
     id: requiredString(row, "id"),
     state: state as DurableAsyncTaskState,
     provider: requiredString(row, "provider"),
+    api_key_id: requiredString(row, "api_key_id"),
     model: requiredString(row, "model"),
     connection_id: nullableString(row, "connection_id"),
     remote_task_id: nullableString(row, "remote_task_id"),
@@ -681,6 +942,9 @@ function decodeTaskDbRow(value: unknown, includePollLease = false): TaskDbRow | 
     terminal_at: nullableInteger(row, "terminal_at"),
     error_code: nullableString(row, "error_code"),
     submission_fence: requiredInteger(row, "submission_fence"),
+    request_fingerprint_hash: requiredString(row, "request_fingerprint_hash"),
+    artifact_file_id: nullableString(row, "artifact_file_id"),
+    artifact_expires_at: nullableInteger(row, "artifact_expires_at"),
   };
   if (decoded.submission_fence < 1) throw new Error("invalid_async_task_fence_in_sqlite");
   if (!includePollLease) return decoded;
@@ -729,6 +993,7 @@ function nullableInteger(row: Record<string, unknown>, field: string): number | 
 function toTaskRecord(row: TaskDbRow): DurableAsyncTaskRecord {
   return {
     id: row.id,
+    apiKeyId: row.api_key_id,
     state: row.state,
     provider: row.provider,
     model: row.model,
@@ -742,6 +1007,8 @@ function toTaskRecord(row: TaskDbRow): DurableAsyncTaskRecord {
     nextPollAt: row.next_poll_at,
     terminalAt: row.terminal_at,
     errorCode: row.error_code,
+    artifactFileId: row.artifact_file_id,
+    artifactExpiresAt: row.artifact_expires_at,
   };
 }
 
@@ -750,17 +1017,20 @@ function validateCreateInput(
   now: number
 ): Array<{ key: string; maxConcurrency: number }> {
   for (const [name, value, maxLength] of [
+    ["apiKeyId", input.apiKeyId, 512],
     ["provider", input.provider, 128],
     ["model", input.model, 256],
     ["strategy", input.strategy, 128],
     ["strategyVersion", input.strategyVersion, 64],
     ["idempotencyScope", input.idempotencyScope, 512],
     ["idempotencyKey", input.idempotencyKey, 512],
+    ["requestFingerprint", input.requestFingerprint, 256],
   ] as const) {
     if (typeof value !== "string" || !value.trim() || value.length > maxLength) {
       throw new Error(`invalid_${name}`);
     }
   }
+  if (input.apiKeyId !== input.idempotencyScope) throw new Error("invalid_task_owner_scope");
   if (!Number.isSafeInteger(input.deadlineAt) || !Number.isSafeInteger(now) || now < 0) {
     throw new Error("invalid_task_deadline");
   }
@@ -801,6 +1071,33 @@ function validateCreateInput(
     );
   }
   return [...requirements].map(([key, maxConcurrency]) => ({ key, maxConcurrency }));
+}
+
+function validateIdempotencyLookup(input: {
+  apiKeyId: string;
+  provider: string;
+  model: string;
+  strategy: string;
+  strategyVersion: string;
+  idempotencyScope: string;
+  idempotencyKey: string;
+  requestFingerprint: string;
+}): void {
+  for (const [name, value, maxLength] of [
+    ["apiKeyId", input.apiKeyId, 512],
+    ["provider", input.provider, 128],
+    ["model", input.model, 256],
+    ["strategy", input.strategy, 128],
+    ["strategyVersion", input.strategyVersion, 64],
+    ["idempotencyScope", input.idempotencyScope, 512],
+    ["idempotencyKey", input.idempotencyKey, 512],
+    ["requestFingerprint", input.requestFingerprint, 256],
+  ] as const) {
+    if (typeof value !== "string" || !value.trim() || value.length > maxLength) {
+      throw new Error(`invalid_${name}`);
+    }
+  }
+  if (input.apiKeyId !== input.idempotencyScope) throw new Error("invalid_task_owner_scope");
 }
 
 function validateRemoteTaskId(value: string): string {

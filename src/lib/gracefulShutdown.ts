@@ -106,6 +106,15 @@ async function waitForDrain(): Promise<void> {
  */
 async function cleanup(): Promise<void> {
   try {
+    const { stopDurableAgnesVideoTaskPoller } = await import("@/lib/durableAgnesVideoTaskPoller");
+    await stopDurableAgnesVideoTaskPoller();
+  } catch (err) {
+    console.warn(
+      "[Shutdown] Could not stop the durable video task poller:",
+      (err as Error).message
+    );
+  }
+  try {
     const [
       { closeAuditDb },
       { closeDbInstance },
