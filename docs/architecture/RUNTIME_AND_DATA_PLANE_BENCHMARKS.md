@@ -1,7 +1,7 @@
 ---
 title: "Runtime and Inference Data Plane Investigation"
 version: 3.8.51
-lastUpdated: 2026-10-10
+lastUpdated: 2026-10-11
 ---
 
 # Runtime and inference data-plane investigation
@@ -2327,3 +2327,76 @@ ownership remains unchanged.
   effective security declaration; all 499 operations whose text signals conditional auth now have
   declarations. These are documentation review queues, not proof that handlers are insecure or
   that the declared response schemas are semantically complete.
+
+## ARM64 DevVM Node, Bun, Rust, and Next.js runs (2026-10-11)
+
+The benchmark checkout was `1b0cf26176` on the ARM64 DevVM (8 logical CPUs, 14 GiB RAM, 1.8 TiB
+root volume). Proxy gateways were pinned to one CPU, the mock upstream to another, and the load
+driver to a third. Each rootless gateway container had a 512 MiB memory limit; the harness ran
+under a 4 GiB memory / 4-CPU systemd scope. The Node image was pinned to
+`node:26.10.0-trixie-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e9615225ce4aaae1`;
+Bun used the ARM64 `oven/bun:1.4.2-slim` image. No request went to a real model provider.
+
+For all runs below, 100 synthetic sessions sent five sequential turns each, with a 64 KiB text
+history per turn. The history is not token-equivalent; the tool-shaped Chat Completions case carries
+synthetic tool calls and results but does not execute tools. The delayed-stream cases emit 50
+128-byte chunks with 10 ms between chunks. Each zero-delay result is the median of two runs; the
+other throughput rows are single exploratory runs.
+
+| Workload | Node 26 throughput / gateway RSS | Bun 1.4.2 throughput / gateway RSS | Rust/Axum throughput / gateway RSS |
+| --- | ---: | ---: | ---: |
+| Responses, 10 ms chunks | 165.1 req/s / 127.7 MiB | 176.8 req/s / 69.1 MiB | 174.3 req/s / 35.3 MiB |
+| Responses, zero-delay burst (median; two runs) | 344.1 req/s / 137.4 MiB | 635.5 req/s / 56.3 MiB | 523.6 req/s / 36.8 MiB |
+| Chat Completions, tool-shaped history, 10 ms chunks | 164.5 req/s / 124.5 MiB | 176.5 req/s / 58.8 MiB | 175.1 req/s / 37.2 MiB |
+
+Every completed workload returned 200 for all 500 requests. In the separate authenticated Rust gateway
+run, 100 sessions completed 500 turns with model aliasing enabled; it accepted and completed all 500,
+rejected none, ended with zero active requests, and peaked at 70.6 MiB RSS. Its health counters reported
+98,733,650 request bytes and 7,435,000 response bytes. Cancellation probes aborted 100/100 client
+requests for Node, Bun, and Rust; every mock upstream reported zero streams still active afterward.
+
+These results describe the isolated proxy implementations only. They do not include OmniRoute's real
+provider adapters, database-backed connection policy, quotas, retries, compression, request logging,
+or upstream rate limits. The small sample count and fixed mock service time also prevent a production
+capacity ranking.
+
+### Full Next.js build and standalone runtime
+
+The full project build ran inside offline ARM64 containers, with an 8 GiB container memory limit and
+four pinned CPUs. A clean `npm ci` used Node 25.8.1/npm 11.11.0, installed 2,434 packages in about a
+minute, and skipped optional `better-sqlite3` because npm 11 blocked its install script. The repository's
+native-dependency gate caught the missing package. The targeted install initially selected a prebuilt
+ARM64 binary requiring glibc 2.29 while the DevVM host is Oracle Linux 8/glibc 2.28; rebuilding from
+source required Python 3.12 because its default Python 3.6 cannot parse current `node-gyp`. The pinned
+Node 26 Debian container loaded the SQLite binding and passed the native-dependency gate.
+
+| Runtime and bundler | Result | Resource/output observation |
+| --- | --- | --- |
+| Node 26.10 / Webpack | Completed with exit 0 in 14m59s; Next reported compilation in 12.7m and generated 598 static pages. | Cgroup memory peak 8 GiB; the intermediate build tree was 6.4 GiB, with a 987 MiB standalone directory. One dynamic-`require` warning remains in `maxaiTransport.ts`. |
+| Node 26.10 / default Turbopack | Did not complete. The kernel killed `next-build` at the 8 GiB cgroup memory ceiling during production compilation. | No host OOM or deployment occurred; the cgroup kept the failure contained. |
+| Bun 1.4.2 / Turbopack, `workerThreads` + `auto` eviction | Did not complete; the kernel OOM-killed Bun after 1m54s at 7 GiB RAM + 2 GiB swap. | Host remained responsive. |
+| Bun 1.4.2 / Turbopack, `workerThreads` + `full` eviction | Did not complete; the kernel OOM-killed Bun after 3m51s at 8 GiB RAM + 3 GiB swap. | Host remained responsive. |
+
+The successful Webpack standalone was then run under both Node 26.10 and Bun 1.4.2 in isolated,
+network-disabled containers. Each runtime returned HTTP 200 for `/api/health`, the SQLite-backed
+`/api/health/ping`, and `/`. The root response was 736,986 bytes. A single 100-client / 10-round
+control-plane probe using the same Node 26 client produced these results:
+
+| Endpoint | Node 26 requests/s (p50 / p95) | Bun 1.4.2 requests/s (p50 / p95) |
+| --- | ---: | ---: |
+| `/api/health` | 401.6 (120.6 / 359.4 ms) | 378.0 (119.4 / 408.2 ms) |
+| `/api/health/ping` | 464.6 (109.5 / 248.5 ms) | 712.4 (69.3 / 162.4 ms) |
+| `/` | 20.3 (4.81 / 5.46 s) | 18.5 (5.21 / 6.16 s) |
+
+After that request wave, the running standalone process reported about 668 MiB RSS under Node and 734
+MiB under Bun. These are single, ordered samples, not a stable performance ranking: Bun ran second,
+after the same database and filesystem had warmed. They do establish that this standalone build's
+dashboard and basic health/database paths start under both runtimes. Background catalog/usage syncs
+logged expected DNS failures because the test containers had no network.
+
+The practical build result is mixed: Node/Webpack completes on this 14 GiB ARM64 builder, but is very
+slow and reaches the memory ceiling; default Node/Turbopack and both Bun/Turbopack configurations
+tested here do not fit the bounded builder. Bun successfully runs the built standalone app, but its
+RSS was not lower in this one full-app sample. A larger authorized builder is needed to finish the
+matched full-build comparison without relaxing the current host safety caps. None of these builds or
+smokes was deployed.
