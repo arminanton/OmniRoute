@@ -6,7 +6,11 @@
 //! the same persisted feedback-window state and conservative initial limit as the TypeScript
 //! coordinator.
 
-use std::{collections::BTreeMap, sync::Mutex, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::Mutex,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -266,11 +270,7 @@ impl SqliteCoordinator {
         ttl_ms: i64,
         now: i64,
     ) -> Result<Option<FencedLease>, CoordinatorError> {
-        if ttl_ms < 1_000 {
-            return Err(CoordinatorError::Invalid(
-                "coordination lease TTL must be at least 1000ms".into(),
-            ));
-        }
+        validate_lease_ttl(ttl_ms)?;
         let expires_at = now.saturating_add(ttl_ms);
         self.atomic(|transaction| {
             prune(transaction, now)?;
@@ -359,11 +359,7 @@ impl SqliteCoordinator {
         ttl_ms: i64,
         now: i64,
     ) -> Result<bool, CoordinatorError> {
-        if ttl_ms < 1_000 {
-            return Err(CoordinatorError::Invalid(
-                "coordination lease TTL must be at least 1000ms".into(),
-            ));
-        }
+        validate_lease_ttl(ttl_ms)?;
         let db = self.db.lock().map_err(|_| CoordinatorError::Poisoned)?;
         let changed = db.execute(
             "UPDATE coordination_leases SET expires=? WHERE id=? AND owner=? AND fence=? AND expires>?",
@@ -498,7 +494,22 @@ impl SqliteCoordinator {
     }
 
     pub fn block(&self, resource: &str, until_ms: i64) -> Result<(), CoordinatorError> {
+        if resource.is_empty() {
+            return Err(CoordinatorError::Invalid("Invalid cooldown".into()));
+        }
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .min(i64::MAX as u128) as i64;
+        let cleanup_through = now_ms.min(until_ms);
         let db = self.db.lock().map_err(|_| CoordinatorError::Poisoned)?;
+        // Match TypeScript block(): remove stale cooldown rows opportunistically, without
+        // deleting rows newer than the caller's supplied expiry in deterministic fixtures.
+        db.execute(
+            "DELETE FROM coordination_blocks WHERE until_ms<=?",
+            [cleanup_through],
+        )?;
         db.execute(
             "INSERT INTO coordination_blocks(resource,until_ms) VALUES (?,?) \
              ON CONFLICT(resource) DO UPDATE SET until_ms=MAX(until_ms,excluded.until_ms)",
@@ -538,6 +549,13 @@ fn checked_js_integer(value: usize) -> Result<u64, CoordinatorError> {
         ));
     }
     Ok(value)
+}
+
+fn validate_lease_ttl(ttl_ms: i64) -> Result<(), CoordinatorError> {
+    if ttl_ms < 1_000 || ttl_ms as u64 > MAX_JS_SAFE_INTEGER {
+        return Err(CoordinatorError::Invalid("Invalid lease TTL".into()));
+    }
+    Ok(())
 }
 
 fn prune(transaction: &Transaction<'_>, now: i64) -> Result<(), CoordinatorError> {
@@ -767,6 +785,7 @@ mod tests {
     use super::{AdaptationState, CoordinationOutcome, CoordinationRequirement, SqliteCoordinator};
     use rusqlite::OptionalExtension;
     use serde_json::Value;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     const TYPESCRIPT_ADAPTATION_FIXTURE: &str = r#"{
       "currentLimit": 2,
@@ -970,5 +989,56 @@ mod tests {
         coordinator
             .release(&permit)
             .expect("release fixture permit");
+    }
+
+    #[test]
+    fn lease_ttl_matches_typescript_safe_integer_boundary() {
+        let coordinator = SqliteCoordinator::open(":memory:", "ttl-boundary-test")
+            .expect("open in-memory coordinator");
+        let id = coordinator
+            .enqueue(&[adaptive_gate("ttl", 1, 1)], 10_000, 20, 1_000)
+            .expect("enqueue lease");
+        assert!(matches!(
+            coordinator.try_acquire(&id, 9_007_199_254_740_992, 1_000),
+            Err(super::CoordinatorError::Invalid(_))
+        ));
+        assert!(coordinator.cancel(&id).is_ok());
+        let id = coordinator
+            .enqueue(&[adaptive_gate("ttl", 1, 1)], 10_000, 20, 1_000)
+            .expect("enqueue lease for minimum boundary");
+        assert!(coordinator.try_acquire(&id, 999, 1_000).is_err());
+        coordinator.cancel(&id).expect("cancel invalid-TTL waiter");
+    }
+
+    #[test]
+    fn block_rejects_empty_resource_and_prunes_expired_rows() {
+        let coordinator = SqliteCoordinator::open(":memory:", "block-validation-test")
+            .expect("open in-memory coordinator");
+        assert!(coordinator.block("", 1_000).is_err());
+        {
+            let db = coordinator.db.lock().expect("coordinator DB lock");
+            db.execute(
+                "INSERT INTO coordination_blocks(resource,until_ms) VALUES (?,?)",
+                ("expired", 1_i64),
+            )
+            .expect("seed expired block");
+        }
+        let future = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64
+            + 60_000;
+        coordinator
+            .block("active", future)
+            .expect("add a future block");
+        let db = coordinator.db.lock().expect("coordinator DB lock");
+        let expired_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM coordination_blocks WHERE resource='expired'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count expired rows");
+        assert_eq!(expired_count, 0);
     }
 }

@@ -475,13 +475,15 @@ Run the Rust/TypeScript interoperability test with:
 cargo test --manifest-path benchmarks/runtime-proxy/Cargo.toml --test coordination_sqlite_interop -- --nocapture
 ```
 
-The test creates a disposable database under the local system temp directory and removes it after
+The test creates disposable databases under the local system temp directory and removes them after
 the test. It launches separate Rust and TypeScript processes to check a shared cap-1 resource,
 independent-resource progress, cancellation cleanup, release, renewal and expiry, fencing, and owner
-checks. `coordination_sqlite.rs` matches the existing `omni-coordination/v1` SQLite/WAL schema and
-atomic lease operations. This first Rust slice accepts only static gates; it rejects adaptive
-requirements rather than silently applying a different cap. Use a dedicated local POSIX volume for
-coordination, never NFS or the application data DB.
+checks. A deterministic adaptive vector also compares admission counts and persisted feedback state
+across both implementations through overload, window reset, and idle recovery. The Rust adapter
+uses the same `omni-coordination/v1` SQLite/WAL schema, atomic lease operations, and default adaptive
+controller values as TypeScript; it remains a benchmark-only implementation, not a production
+runtime replacement or a separately configurable adaptive controller. Use a dedicated local POSIX
+volume for coordination, never NFS or the application data DB.
 
 ### SQLite quota bucket storage and sliding-window math probe
 

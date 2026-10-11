@@ -242,3 +242,58 @@ test("bifrost route: records relay usage after SSE stream completion", async () 
 
   restoreEnv();
 });
+
+test("bifrost route: normalizes streaming upstream errors before returning them", async () => {
+  process.env.BIFROST_BASE_URL = "http://bifrost.test.local:8080";
+  process.env.BIFROST_TIMEOUT_MS = "5000";
+  process.env.BIFROST_STREAMING_ENABLED = "1";
+  delete process.env.BIFROST_API_KEY;
+  delete process.env.OMNIROUTE_BIFROST_KEY;
+
+  const relayToken = seedRelayToken(`relay_bifrost_stream_error_${Date.now()}`);
+  globalThis.fetch = async () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("upstream rate limit exceeded"));
+          controller.close();
+        },
+      }),
+      {
+        status: 429,
+        headers: { "content-type": "text/plain" },
+      }
+    );
+
+  try {
+    const { POST } = await import(
+      `../../../../src/app/api/v1/relay/chat/completions/bifrost/route.ts?case=${Date.now()}-${Math.random()}`
+    );
+
+    const req = new Request("http://localhost/api/v1/relay/chat/completions/bifrost", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${relayToken.rawToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4",
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+
+    const res = await POST(req);
+    assert.equal(res.status, 429);
+    assert.equal(res.headers.get("content-type"), "application/json");
+    const body = await res.json();
+    assert.match(String(body?.error?.message ?? ""), /upstream rate limit exceeded/i);
+
+    const logs = getRelayLogs(relayToken.id, 10);
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].status, "error");
+    assert.equal(logs[0].status_code, 429);
+  } finally {
+    restoreEnv();
+  }
+});

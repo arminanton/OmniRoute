@@ -2,6 +2,7 @@
 mod coordination_sqlite;
 
 use coordination_sqlite::{CoordinationRequirement, FencedLease, SqliteCoordinator};
+use rusqlite::Connection;
 use serde_json::json;
 use std::{env, error::Error, process};
 
@@ -59,6 +60,32 @@ fn run() -> Result<(), Box<dyn Error>> {
                     println!("{{\"status\":\"blocked\"}}");
                 }
             }
+        }
+        "adaptive-vector" => {
+            let db_path = args.next().ok_or("expected DB path")?;
+            let owner = args.next().ok_or("expected owner")?;
+            let coordinator = SqliteCoordinator::open(&db_path, owner)?;
+            let resource = "adaptive-parity";
+            let mut admissions = vec![adaptive_capacity_at(&coordinator, resource, 1_000)?];
+            coordinator.observe_protocol(resource, "concurrency_overload", 0.0, 1_100)?;
+            coordinator.observe_protocol(resource, "concurrency_overload", 0.0, 1_200)?;
+            admissions.push(adaptive_capacity_at(&coordinator, resource, 1_200)?);
+            admissions.push(adaptive_capacity_at(&coordinator, resource, 31_001)?);
+            coordinator.observe_protocol(resource, "concurrency_overload", 0.0, 31_100)?;
+            coordinator.observe_protocol(resource, "concurrency_overload", 0.0, 31_200)?;
+            admissions.push(adaptive_capacity_at(&coordinator, resource, 31_200)?);
+            admissions.push(adaptive_capacity_at(&coordinator, resource, 61_001)?);
+            admissions.push(adaptive_capacity_at(&coordinator, resource, 91_001)?);
+            admissions.push(adaptive_capacity_at(&coordinator, resource, 121_001)?);
+
+            let db = Connection::open(&db_path)?;
+            let raw_state: String = db.query_row(
+                "SELECT state FROM coordination_adaptation WHERE resource=?",
+                [resource],
+                |row| row.get(0),
+            )?;
+            let state: serde_json::Value = serde_json::from_str(&raw_state)?;
+            println!("{}", json!({"admissions": admissions, "state": state}));
         }
         "cancel" => {
             let db_path = args.next().ok_or("expected DB path")?;
@@ -121,6 +148,33 @@ fn run() -> Result<(), Box<dyn Error>> {
         _ => return Err(format!("unknown probe mode: {mode}").into()),
     }
     Ok(())
+}
+
+fn adaptive_capacity_at(
+    coordinator: &SqliteCoordinator,
+    resource: &str,
+    now: i64,
+) -> Result<usize, Box<dyn Error>> {
+    let requirement = CoordinationRequirement {
+        key: resource.to_owned(),
+        limit: 6,
+        adaptive: true,
+        initial_limit: Some(4),
+    };
+    let mut leases = Vec::new();
+    for _ in 0..6 {
+        let id = coordinator.enqueue(&[requirement.clone()], now + 10_000, 20, now)?;
+        if let Some(lease) = coordinator.try_acquire(&id, 60_000, now)? {
+            leases.push(lease);
+        } else {
+            coordinator.cancel(&id)?;
+        }
+    }
+    let admitted = leases.len();
+    for lease in leases {
+        coordinator.release(&lease)?;
+    }
+    Ok(admitted)
 }
 
 fn parse<T>(value: Option<String>, name: &str) -> Result<T, Box<dyn Error>>

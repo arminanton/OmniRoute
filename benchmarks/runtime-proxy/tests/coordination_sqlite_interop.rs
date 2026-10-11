@@ -300,6 +300,92 @@ fn rust_and_typescript_processes_share_v1_cap_fences_and_lease_lifecycle() {
     assert_eq!(ts_acquired["acquired"], true);
 }
 
+#[test]
+fn adaptive_controller_matches_between_rust_and_typescript_processes() {
+    let temporary = TempDirectory::new();
+    let rust_db_path = temporary.0.join("rust-adaptive.sqlite");
+    let rust_db = rust_db_path.to_str().expect("UTF-8 Rust DB path");
+    let rust = run_probe(&["adaptive-vector", rust_db, "rust-adaptive-owner"]);
+
+    let typescript_db_path = temporary.0.join("typescript-adaptive.sqlite");
+    let typescript = run_typescript_probe(
+        typescript_db_path.as_path(),
+        "typescript-adaptive-owner",
+        r#"
+          import { DatabaseSync } from 'node:sqlite';
+          const filename = process.env.TEST_COORDINATION_DB;
+          const coordinator = new SqliteCoordinator(
+            filename,
+            process.env.TEST_COORDINATION_OWNER,
+          );
+          const resource = 'adaptive-parity';
+          const requirement = { key: resource, limit: 6, adaptive: true, initialLimit: 4 };
+          function capacityAt(now) {
+            const leases = [];
+            for (let attempt = 0; attempt < 6; attempt++) {
+              const id = coordinator.enqueue([requirement], now + 10_000, 20, now);
+              const lease = coordinator.tryAcquire(id, 60_000, now);
+              if (lease) leases.push(lease);
+              else coordinator.cancel(id);
+            }
+            for (const lease of leases) coordinator.release(lease);
+            return leases.length;
+          }
+
+          const admissions = [capacityAt(1_000)];
+          coordinator.observe(resource, 'concurrency_overload', 0, 1_100);
+          coordinator.observe(resource, 'concurrency_overload', 0, 1_200);
+          admissions.push(capacityAt(1_200));
+          admissions.push(capacityAt(31_001));
+          coordinator.observe(resource, 'concurrency_overload', 0, 31_100);
+          coordinator.observe(resource, 'concurrency_overload', 0, 31_200);
+          admissions.push(capacityAt(31_200));
+          admissions.push(capacityAt(61_001));
+          admissions.push(capacityAt(91_001));
+          admissions.push(capacityAt(121_001));
+          coordinator.close();
+
+          const db = new DatabaseSync(filename);
+          const row = db.prepare(
+            'SELECT state FROM coordination_adaptation WHERE resource=?',
+          ).get(resource);
+          db.close();
+          console.log(JSON.stringify({ admissions, state: JSON.parse(String(row.state)) }));
+        "#,
+    );
+
+    assert_eq!(rust["admissions"], serde_json::json!([4, 2, 2, 1, 1, 2, 3]));
+    assert_eq!(rust["state"]["currentLimit"].as_u64(), Some(3));
+    assert_eq!(rust["state"]["recoveryCeiling"].as_u64(), Some(4));
+    assert_eq!(rust["state"]["pressure"], "normal");
+    for field in [
+        "currentLimit",
+        "recoveryCeiling",
+        "shortLatencyEwma",
+        "longLatencyEwma",
+        "windowActiveCostIntegral",
+        "windowCompleted",
+        "windowLatencySamples",
+        "windowStartMs",
+        "utilization",
+    ] {
+        assert_eq!(
+            rust["state"][field].as_f64(),
+            typescript["state"][field].as_f64(),
+            "adaptive field differs: {field}"
+        );
+    }
+    assert_eq!(
+        rust["state"]["freezeGrowth"],
+        typescript["state"]["freezeGrowth"]
+    );
+    assert_eq!(
+        rust["state"]["criticalDecreaseConsumed"],
+        typescript["state"]["criticalDecreaseConsumed"]
+    );
+    assert_eq!(rust["state"]["pressure"], typescript["state"]["pressure"]);
+}
+
 fn gate(key: &str, limit: usize) -> CoordinationRequirement {
     CoordinationRequirement {
         key: key.to_owned(),

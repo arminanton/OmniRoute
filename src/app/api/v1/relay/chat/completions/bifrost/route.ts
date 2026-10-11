@@ -312,26 +312,11 @@ export async function POST(request: Request) {
       newHeaders.set("Content-Type", upstream.headers.get("Content-Type") ?? "application/json");
     }
 
-    if (wantsStream && upstream.body) {
-      const stream = finalizeReadableStream(upstream.body, (error) => {
-        clearTimeout(tid);
-        const statusCode = timedOut ? 504 : upstream.status;
-        const status = error || statusCode >= 500 ? "error" : "success";
-        recordUsage(status, statusCode);
-      });
-
-      return new Response(stream, {
-        status: upstream.status,
-        headers: newHeaders,
-      });
-    }
-
-    clearTimeout(tid);
-
     // Normalize non-2xx through parseUpstreamError + buildErrorBody instead of
     // relaying the sidecar body verbatim — parity with the TS sibling route and
     // Hard Rule #12 (GHSA-9m72-44hg-w32g).
     if (!upstream.ok) {
+      clearTimeout(tid);
       const parsed = await parseUpstreamError(upstream, null);
       const errorBody = buildErrorBody(
         parsed.statusCode,
@@ -348,6 +333,22 @@ export async function POST(request: Request) {
         headers: newHeaders,
       });
     }
+
+    if (wantsStream && upstream.body) {
+      const stream = finalizeReadableStream(upstream.body, (error) => {
+        clearTimeout(tid);
+        const statusCode = timedOut ? 504 : upstream.status;
+        const status = error || statusCode >= 500 ? "error" : "success";
+        recordUsage(status, statusCode);
+      });
+
+      return new Response(stream, {
+        status: upstream.status,
+        headers: newHeaders,
+      });
+    }
+
+    clearTimeout(tid);
 
     recordUsage(upstream.status < 500 ? "success" : "error", upstream.status);
 

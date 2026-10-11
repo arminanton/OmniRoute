@@ -6708,6 +6708,8 @@ paths:
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
           $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "500":
           description: Proxy settings could not be read
           content:
@@ -6745,6 +6747,8 @@ paths:
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
           $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "500":
           description: Proxy settings could not be updated
           content:
@@ -6786,6 +6790,8 @@ paths:
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
           $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "500":
           description: Proxy configuration could not be deleted
           content:
@@ -10474,7 +10480,21 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
-        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
+        "503":
+          description: Installer network failure or management-auth service unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "504":
+          description: npm installation timed out.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "507":
+          description: Insufficient storage prevented npm installation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/services/9router/start:
     post:
@@ -11725,7 +11745,21 @@ paths:
                   - $ref: "#/components/schemas/ApiErrorResponse"
                   - $ref: "#/components/schemas/StringErrorResponse"
         "500": { description: Bifrost install failed. }
-        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
+        "503":
+          description: Installer network failure or management-auth service unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "504":
+          description: npm installation timed out.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "507":
+          description: Insufficient storage prevented npm installation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/services/bifrost/start:
     post:
@@ -12098,7 +12132,21 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
-        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
+        "503":
+          description: Installer network failure or management-auth service unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "504":
+          description: npm installation timed out.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "507":
+          description: Insufficient storage prevented npm installation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/services/dario/start:
     post:
@@ -12804,7 +12852,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [9router, cliproxy]
+            enum: [9router, cliproxy, mux, bifrost, dario]
         - name: tail
           in: query
           schema:
@@ -44656,10 +44704,11 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/RelayErrorResponse" }
         "429":
-          description: Relay token or client-IP rate limit exceeded.
+          description: >-
+            Relay token/client-IP throttling or a delegated provider/account/upstream rate limit.
           headers:
             Retry-After:
-              description: Seconds until the applicable rate-limit window resets.
+              description: Seconds until the applicable relay, client-IP, or provider retry window resets.
               schema: { type: integer, minimum: 0 }
             X-RateLimit-Scope:
               description: Present for per-IP limiting.
@@ -44682,6 +44731,13 @@ paths:
               schema: { $ref: "#/components/schemas/RelayErrorResponse" }
         "503":
           description: Chat admission or provider service is temporarily unavailable.
+          headers:
+            Retry-After:
+              description: Minimum delay before retrying when supplied by the admission or upstream path.
+              schema: { type: string }
+            x-request-id:
+              description: Correlation ID included on local resource-pressure rejections when available.
+              schema: { type: string }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/RelayErrorResponse" }
@@ -44709,8 +44765,8 @@ paths:
         Authorization is shared, send the relay token in X-Relay-Token when also sending
         an OmniRoute Bearer key; a relay Bearer token by itself works when the outer
         API-key requirement is disabled. The sidecar route returns 503 when disabled or
-        unconfigured, 502 when unreachable, and 504 on timeout. Provider error statuses
-        are preserved with a normalized JSON error body.
+        unconfigured, 502 when unreachable, and 504 on timeout. Provider error statuses are
+        preserved with a normalized JSON error body, including when the request asks for streaming.
       security:
         - RelayTokenHeaderAuth: []
           BearerAuth: []
@@ -44767,10 +44823,10 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/RelayErrorResponse" }
         "429":
-          description: Relay token or client-IP rate limit exceeded.
+          description: Relay token/client-IP throttling or a Bifrost sidecar/provider rate limit.
           headers:
             Retry-After:
-              description: Seconds until the applicable rate-limit window resets.
+              description: Seconds until the applicable relay, client-IP, or provider retry window resets.
               schema: { type: integer, minimum: 0 }
             X-RateLimit-Scope:
               description: Present for per-IP limiting.
@@ -44817,7 +44873,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/RelayErrorResponse" }
         default:
-          description: Other non-success status returned by Bifrost, normalized as a JSON error.
+          description: >-
+            Any other status returned by Bifrost; non-2xx responses are normalized as JSON errors,
+            while successful response bodies are passed through.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/RelayErrorResponse" }
@@ -58868,7 +58926,10 @@ components:
             type:
               type: string
             code:
-              type: string
+              description: Machine-readable code; upstream transcription failures may use the numeric HTTP status.
+              oneOf:
+                - type: string
+                - type: integer
             reason:
               type: string
             correlation_id:
