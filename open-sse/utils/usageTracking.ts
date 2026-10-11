@@ -467,7 +467,16 @@ function getReportedInputTokens(usage: UsageLike, format: string): number {
     );
   }
   if (format === FORMATS.GEMINI) {
-    return tokenNumber(usage.promptTokenCount);
+    // Native Gemini wire payloads use promptTokenCount, but adapters such as
+    // Antigravity normalize provider metadata into the shared prompt_tokens shape
+    // before this guard runs. Recognize those aliases so valid upstream usage does
+    // not fall through to the expensive local whole-prompt token estimator.
+    return tokenNumber(
+      usage.promptTokenCount ??
+        usage.prompt_tokens ??
+        usage.input_tokens ??
+        usage.prompt_token_count
+    );
   }
   if (format === FORMATS.OPENAI_RESPONSES) {
     return tokenNumber(usage.input_tokens ?? usage.prompt_tokens);

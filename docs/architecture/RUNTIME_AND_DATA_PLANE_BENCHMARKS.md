@@ -1036,6 +1036,39 @@ but from 16.67 to 17.41 s with capture. The 128-connection runs passed all 200 t
 and, under capture, all 200 traces. These single trials do not justify raising the production
 connection cap; large-body ingestion and transformation remain the measured high-latency stages.
 
+#### 70-session, 3.5 MB request capture A/B (2026-10-11)
+
+A higher-context test used the same authenticated production chat route handler, local mock provider,
+and synthetic CLI/IDE tool round-trip, with 70 concurrent conversations and 140 requests. Each
+request carried five 700,000-byte user-context strings and serialized to about 3.50 MB. The test
+does not start Next.js middleware or the standalone server, and it sends no real provider traffic.
+Both variants used the unchanged 128 MiB call-log artifact admission cap; the capture-enabled run
+used the normal private-overflow path for complete bodies.
+
+| Capture mode | Requests | Route-ready p50 / p95 / max | Body complete p95 | Body complete to outbound fetch p95 | Trace result | Gateway process max RSS |
+| --- | ---: | ---: | ---: | ---: | --- | ---: |
+| Request logging off | 140/140 | 10.71 / 29.32 / 32.23 s | 25.83 s | 0.41 s | Not enabled | 1.58 GB |
+| Metadata artifact + private full capture | 140/140 | 12.81 / 31.31 / 35.42 s | 27.79 s | 0.45 s | 140/140 complete | 2.47 GB |
+
+The captured run wrote 980,396,924 raw bytes and 738,464,461 compressed bytes across the 140
+private traces. It retained all 140 metadata artifacts, all provider/client request and response
+payloads, and all stream channels; there were no preparation refusals, omitted details, corrupt
+artifacts, worker failures, or incomplete traces. The writer's reservation high-water was 4.83 MiB,
+because large bodies stayed in the streamed private capture instead of being copied into ordinary
+artifacts.
+
+The no-log run still had a 29.32 s route-ready p95 and a 25.83 s body-completion p95. Its admission
+sampler reached 140,037,324 of 140,509,184 in-flight bytes (99.66%), while byte-queued use peaked at
+15 MiB of 64 MiB, structural/byte waiters stayed at zero, and no requests were shed. Outbound fetch
+began within 412 ms of body completion at p95. The private-capture run's 30-second client-deadline
+trial timed out a request waiting for response headers; rerunning with a 120-second diagnostic
+deadline completed the workload. In this sample, capture added roughly 2 seconds to route/body p95
+and about 0.9 GB to process high-water RSS, while the long pre-provider delay remained with capture
+off. This identifies a large-request ingress/processing tail as the primary measured problem for
+this fixture; it does not isolate the exact CPU or socket-buffer cost. The pair is not repeated,
+and its latency comparison is indicative rather than a stable effect estimate. Host memory pressure
+remained zero, and temporary test data was removed after each run.
+
 ### Fresh standalone 70/100-session transport and capture sweep (2026-10-10)
 
 The earlier standalone artifact was built at 2026-10-09 15:44 UTC, before the evening source

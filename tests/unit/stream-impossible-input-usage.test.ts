@@ -10,6 +10,8 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 const core = await import("../../src/lib/db/core.ts");
 const { createSSEStream } = await import("../../open-sse/utils/stream.ts");
 const { sanitizeProviderUsageForRequest } = await import("../../open-sse/utils/usageTracking.ts");
+const { normalizeAntigravityUsageMetadata } =
+  await import("../../open-sse/executors/antigravity/usageMetadata.ts");
 const { FORMATS } = await import("../../open-sse/translator/formats.ts");
 
 const textEncoder = new TextEncoder();
@@ -197,6 +199,24 @@ test("impossible input usage is repaired for OpenAI, Responses, and Gemini shape
   assert.ok(gemini.promptTokenCount < 300_000);
   assert.equal(gemini.cachedContentTokenCount, 0);
   assert.equal(gemini.totalTokenCount, gemini.promptTokenCount + 12);
+});
+
+test("normalized Antigravity Gemini usage preserves valid provider token counts", () => {
+  const body = {
+    model: "antigravity/gemini-3.8-flash-high",
+    messages: [{ role: "user", content: "x".repeat(128 * 1024) }],
+  };
+  const usage = normalizeAntigravityUsageMetadata({
+    promptTokenCount: 30_000,
+    candidatesTokenCount: 17,
+    totalTokenCount: 30_017,
+  });
+
+  const sanitized = sanitizeProviderUsageForRequest(usage, body, FORMATS.ANTIGRAVITY);
+
+  assert.equal(sanitized, usage, "normalized prompt_tokens should remain provider-reported usage");
+  assert.equal(sanitized?.prompt_tokens, 30_000);
+  assert.equal(sanitized?.total_tokens, 30_017);
 });
 
 test("server-side context and remote file references bypass the body-byte guard", () => {
