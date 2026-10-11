@@ -1528,18 +1528,19 @@ timestamp-prefixed strings before returning data to logs, APIs, exports, or cont
 `npm run bench:call-log-stream-frame-table` runs twenty local production-writer iterations with 100
 synthetic frames per track and 512-byte text deltas. When all three tracks share payloads but have
 different timestamps, the stream representation falls from 181,836 to 65,173 bytes (64.16%); the
-full artifact median is 65,577 bytes, median synchronous writer time is 3.511 ms, and queue
-projection plus footprint estimation is 1.528 ms. With two tracks sharing the same payloads, it
+full artifact median is 65,577 bytes, median synchronous writer time is 3.394 ms, and queue
+projection plus footprint estimation is 1.532 ms. With two tracks sharing the same payloads, it
 falls from 182,536 to 125,083 bytes (31.47%); the full artifact median is 125,490 bytes, writer time
-is 4.403 ms, and projection/estimation is 1.591 ms. When all payloads are unique, the table is
-refused and the stream remains 184,136 bytes (full artifact 184,540 bytes; writer 5.541 ms;
-projection/estimation 1.412 ms). Exact readback passes in all cases.
+is 4.361 ms, and projection/estimation is 1.567 ms. When all payloads are unique, the table is
+refused and the stream remains 184,136 bytes (full artifact 184,540 bytes; writer 5.526 ms;
+projection/estimation 1.441 ms). Exact readback passes in all cases.
 
-A separate burst submitted 70 independently allocated timestamped artifacts at once. All 70 were
-stored and read back; the queue peaked at 69 waiting jobs, reservation high-water was 51,551,960 of
-134,217,728 bytes, with zero detail omissions or worker failures. The burst completed in 309.572 ms.
-This exercises the artifact writer and queue, not the full HTTP/provider route, and records no
-process RSS peak. The payload-dedup and artifact-worker suites pass 46/46, including malformed
+A separate burst submitted 70 independently allocated timestamped artifacts at once. The summed
+raw queue estimate was 126,992,360 bytes; projection reduced it to 51,551,960 bytes (59.41%). All
+70 were stored and read back; the queue peaked at 69 waiting jobs, reservation high-water was
+51,551,960 of 134,217,728 bytes, with zero detail omissions or worker failures. This run completed
+in 239.929 ms. It exercises the artifact writer and queue, not the full HTTP/provider route, and
+records no process RSS peak. The payload-dedup and artifact-worker suites pass 46/46, including malformed
 timestamp/index rejection, unique-frame fallback, and asynchronous worker round-trip;
 `typecheck:core` passes. The new disk representation requires a schema-11-aware reader.
 Cross-version rollback/read behavior and full 70–100-session application/provider requests remain

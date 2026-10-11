@@ -235,6 +235,18 @@ try {
   const parallelArtifacts = Array.from({ length: parallelArtifactCount }, (_unused, index) =>
     makeArtifact(`parallel-queue-${index}`, makeStreamChunks("shared"))
   );
+  let rawQueueFootprintEstimateBytes = 0;
+  let projectedQueueFootprintEstimateBytes = 0;
+  for (const artifact of parallelArtifacts) {
+    const rawEstimate = estimateCallLogArtifactFootprint(artifact);
+    const projectedEstimate = estimateCallLogArtifactFootprint(
+      projectCallLogArtifactForQueue(artifact)
+    );
+    assert.equal(rawEstimate.reason, undefined);
+    assert.equal(projectedEstimate.reason, undefined);
+    rawQueueFootprintEstimateBytes += rawEstimate.estimatedBytes;
+    projectedQueueFootprintEstimateBytes += projectedEstimate.estimatedBytes;
+  }
   const parallelStarted = process.hrtime.bigint();
   const parallelResults = await Promise.all(
     parallelArtifacts.map((artifact) => writeCallArtifactAsync(artifact))
@@ -263,6 +275,14 @@ try {
           artifacts: parallelArtifactCount,
           completed: parallelResults.filter(Boolean).length,
           elapsedMs: Number(parallelElapsedMs.toFixed(3)),
+          rawQueueFootprintEstimateBytes,
+          projectedQueueFootprintEstimateBytes,
+          estimateReductionPercent: Number(
+            (
+              (1 - projectedQueueFootprintEstimateBytes / rawQueueFootprintEstimateBytes) *
+              100
+            ).toFixed(2)
+          ),
           queuedArtifactsHighWater: writerSnapshot.queuedArtifactsHighWater,
           reservedArtifactBytesHighWater: writerSnapshot.reservedArtifactBytesHighWater,
           reservationLimitBytes: writerSnapshot.artifactFootprintLimitBytes,
