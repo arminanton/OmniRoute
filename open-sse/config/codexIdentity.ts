@@ -302,12 +302,16 @@ export function createCodexClientIdentity(
     };
   }
 
-  const sessionId = getCodexConvergedSessionId(providerSpecificData, options.accountKey);
+  const sessionId =
+    nonEmptyString(clientSessionId) || mode === "full"
+      ? getCodexConvergedSessionId(providerSpecificData, options.accountKey)
+      : randomUUID();
   const threadId =
     mode === "full"
       ? sessionId
-      : getCodexConvergedThreadId(clientSessionId, providerSpecificData, options.accountKey) ||
-        sessionId;
+      : (nonEmptyString(clientSessionId)
+          ? getCodexConvergedThreadId(clientSessionId, providerSpecificData, options.accountKey)
+          : randomUUID()) || randomUUID();
 
   return {
     mode,

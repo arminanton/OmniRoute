@@ -10,6 +10,7 @@ import { nodeTypeFromId } from "@/lib/db/providerNodeSelect";
 import { hydrateCompatibleNodeBaseUrl } from "./compatibleNodeBaseUrl.ts";
 import { extractGoogApiKeyHeader } from "./googApiKeyAuth.ts";
 import { describeUpstreamFailure } from "@/shared/utils/upstreamError";
+import { looksLikeQuotaExhausted } from "@/shared/utils/classify429";
 import { buildAllExpiredCredentials } from "./authExpiredCredentials.ts";
 import {
   getCachedRawProviderConnections,
@@ -3222,6 +3223,22 @@ export async function markAccountUnavailable(
       conn
     ) {
       const scope = getCodexModelScope(model);
+      const isCapacityOrTransient =
+        /at capacity|overloaded|server error/i.test(String(errorText || "")) ||
+        (!looksLikeQuotaExhausted(errorText) &&
+          fallbackResult.reason !== RateLimitReason.QUOTA_EXHAUSTED &&
+          !fallbackResult.creditsExhausted &&
+          !fallbackResult.dailyQuotaExhausted &&
+          !/quota reached/i.test(String(errorText || "")));
+
+      if (isCapacityOrTransient) {
+        log.info(
+          "AUTH",
+          `Codex [429] (${scope}): transient capacity/burst — soft retry without model lockout`
+        );
+        return { shouldFallback: true, cooldownMs: 0 };
+      }
+
       const scopeRateLimitedUntil =
         getCodexChildCooldown(conn, model) || getUnavailableUntil(cooldownMs);
       const scopeCooldownMs = Math.max(new Date(scopeRateLimitedUntil).getTime() - Date.now(), 0);

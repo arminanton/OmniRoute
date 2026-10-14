@@ -468,3 +468,22 @@ test("children sharing a parent session retain distinct native thread identities
   assert.ok(first && second);
   assert.notEqual(first.threadId, second.threadId);
 });
+
+test("requests without clientSessionId receive unique thread and window identities to avoid collision", () => {
+  const providerSpecificData = { workspaceId: "workspace-42" };
+  const first = createCodexClientIdentity(null, providerSpecificData, {
+    mode: "session",
+    accountKey: "connection-42",
+  });
+  const second = createCodexClientIdentity(null, providerSpecificData, {
+    mode: "session",
+    accountKey: "connection-42",
+  });
+  assert.ok(first && second);
+  assert.notEqual(first.sessionId, second.sessionId);
+  assert.notEqual(first.threadId, second.threadId);
+  assert.notEqual(first.windowId, second.windowId);
+  assert.equal(first.windowId, `${first.threadId}:0`);
+  assert.equal(second.windowId, `${second.threadId}:0`);
+});
+

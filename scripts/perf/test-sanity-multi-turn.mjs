@@ -20,6 +20,7 @@ console.log(`Starting sanity test: ${CONCURRENCY} parallel multi-turn conversati
 
 async function runConversation(id) {
   const startTime = Date.now();
+  const sessionId = `conv-${id}-${Date.now()}`;
   const a = id + 1;
   const b = 10;
   const expectedSum = a + b;
@@ -31,6 +32,7 @@ async function runConversation(id) {
     headers: {
       "Authorization": `Bearer ${AUTH_KEY}`,
       "Content-Type": "application/json",
+      "x-omniroute-session-id": sessionId,
     },
     body: JSON.stringify({
       model: MODEL,
@@ -55,6 +57,7 @@ async function runConversation(id) {
     headers: {
       "Authorization": `Bearer ${AUTH_KEY}`,
       "Content-Type": "application/json",
+      "x-omniroute-session-id": sessionId,
     },
     body: JSON.stringify({
       model: MODEL,
