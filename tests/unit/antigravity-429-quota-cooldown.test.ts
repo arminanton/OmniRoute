@@ -241,3 +241,39 @@ test("core-owned Antigravity quota state applies the same provenance-aware cap",
   assert.equal(headerResult.failureCount, 1);
   assert.ok(headerResult.cooldownMs > 2 * 60 * 60_000 - 5_000);
 });
+
+test("Google Cloud Code 429 with RATE_LIMIT_EXCEEDED and retryDelay 0s does not lock out account", () => {
+  const cloudCodeErrorJson = {
+    code: 429,
+    status: "RESOURCE_EXHAUSTED",
+    message: "You have exhausted your capacity on this model.",
+    details: [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "RATE_LIMIT_EXCEEDED",
+        "domain": "cloudcode-pa.googleapis.com",
+        "metadata": { model: "gemini-3.8-flash-high" },
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+        "retryDelay": "0s",
+      },
+    ],
+  };
+
+  const hint = resolveAntigravityBodyRetryHint(
+    JSON.stringify(cloudCodeErrorJson),
+    cloudCodeErrorJson.message
+  );
+  assert.ok(hint !== null, "expected hint to be parsed");
+  assert.equal(hint!.retryMs, 2000, "expected 0s retryDelay to use 2000ms floor");
+
+  const msg = "You have exhausted your capacity on this model. RATE_LIMIT_EXCEEDED (reset after 0s)";
+  const category = classify429(msg);
+  assert.equal(category, "rate_limited");
+
+  const decision = decide429(category, hint!.retryMs);
+  assert.equal(decision.kind, "soft_retry");
+  assert.equal(decision.retryAfterMs, 2000);
+});
+

@@ -61,7 +61,7 @@ function retryInfoDetailsMs(details: unknown): number | null {
     const type = String(detailRecord["@type"] ?? "");
     if (!type.includes("RetryInfo")) continue;
     const ms = parseDelayString(detailRecord.retryDelay);
-    if (ms !== null && ms > 0) return Math.min(ms, MAX_SHORT_RETRY_HINT_MS);
+    if (ms !== null && ms >= 0) return Math.min(ms === 0 ? 2_000 : ms, MAX_SHORT_RETRY_HINT_MS);
   }
   return null;
 }

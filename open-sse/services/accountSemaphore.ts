@@ -55,8 +55,8 @@ export interface AccountSemaphoreStatsEntry {
   blockedUntil: string | null;
 }
 
-const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_MAX_QUEUE_SIZE = 20;
+const DEFAULT_TIMEOUT_MS = Number(process.env.RATE_LIMIT_MAX_WAIT_MS || 30_000);
+const DEFAULT_MAX_QUEUE_SIZE = Number(process.env.RATE_LIMIT_MAX_QUEUE_DEPTH || 256);
 const gates = new Map<string, AccountGate>();
 const queuedRequests = new Set<AcquireRequest>();
 

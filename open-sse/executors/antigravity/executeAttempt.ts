@@ -156,13 +156,16 @@ export function toSafeAntigravityLog(log: ExecutorLog | null | undefined): SafeA
 /** Flatten a 429/503 error JSON body (message + `error.details[].reason`) into one string. */
 export function buildAntigravity429ErrorMessage(errorJson: unknown): string {
   const obj = errorJson as
-    { error?: { message?: unknown; details?: unknown }; message?: unknown } | null | undefined;
+    | { error?: { message?: unknown; details?: unknown }; message?: unknown; details?: unknown }
+    | null
+    | undefined;
   let errorMessage = String(obj?.error?.message || obj?.message || "");
-  const details = obj?.error?.details;
+  const details = obj?.error?.details || obj?.details;
   if (Array.isArray(details)) {
     for (const detail of details) {
-      const reason = (detail as { reason?: unknown } | null)?.reason;
-      if (reason) errorMessage += ` ${reason}`;
+      const d = detail as { reason?: unknown; retryDelay?: unknown } | null;
+      if (d?.reason) errorMessage += ` ${d.reason}`;
+      if (d?.retryDelay) errorMessage += ` (reset after ${d.retryDelay})`;
     }
   }
   return errorMessage;

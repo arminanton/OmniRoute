@@ -1494,7 +1494,10 @@ export class AntigravityExecutor extends BaseExecutor {
     {
       const resolved = await this.tryResolveRetryFromErrorBody(ctx);
       if (resolved.kind === "return") return { action: "return", result: resolved.result };
-      retryMs = Math.max(retryMs ?? 0, resolved.retryMs ?? 0) || null;
+      retryMs =
+        retryMs !== null
+          ? Math.max(retryMs, resolved.retryMs ?? 0)
+          : (resolved.retryMs ?? null);
       switchAuth = resolved.switchAuth;
     }
 
@@ -1599,9 +1602,11 @@ export class AntigravityExecutor extends BaseExecutor {
 
       // 1. Try to parse explicit retry time from message
       const bodyRetryHint = resolveAntigravityBodyRetryHint(errorBody, errorMessage);
+      const headerRetry = this.parseRetryHeaders(response.headers);
       const parsedRetryMs =
-        Math.max(this.parseRetryHeaders(response.headers) ?? 0, bodyRetryHint?.retryMs ?? 0) ||
-        null;
+        headerRetry !== null
+          ? Math.max(headerRetry, bodyRetryHint?.retryMs ?? 0)
+          : (bodyRetryHint?.retryMs ?? null);
 
       // 2. Classify 429, then decide the final retry time BEFORE the credits retry so
       //    full_quota_exhausted can skip the credits attempt entirely (avoids ~41s hold

@@ -73,7 +73,7 @@ export class SqliteCoordinator {
   enqueue(
     requirements: CoordinationRequirement[],
     expiresAt: number,
-    maxQueueSize = 20,
+    maxQueueSize = Number(process.env.RATE_LIMIT_MAX_QUEUE_DEPTH || 256),
     now = Date.now()
   ): string {
     if (!requirements.length || !Number.isFinite(expiresAt)) throw new Error("Invalid reservation");
@@ -222,9 +222,10 @@ export class SqliteCoordinator {
       maxLimit: cap,
       windowMs: 30000,
     }).adaptation;
-    const state = row
-      ? (JSON.parse(String(row.state)) as AdaptationState)
-      : createAdaptationState(initialLimit ?? cap, 1, cap, now);
+    const state =
+      row && Number(row.configured_cap) === cap
+        ? (JSON.parse(String(row.state)) as AdaptationState)
+        : createAdaptationState(initialLimit ?? cap, 1, cap, now);
     state.currentLimit = Math.min(cap, Math.max(1, state.currentLimit));
     // Idle recovery returns only to the starting budget; growth beyond it requires measured success/utilization.
     state.recoveryCeiling = Math.min(cap, Math.max(1, initialLimit ?? state.recoveryCeiling));

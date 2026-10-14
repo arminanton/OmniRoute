@@ -108,38 +108,46 @@ export function classify429(errorMessage: string): Category {
 }
 
 export function decide429(category: Category, retryAfterMs: number | null): Decision {
+  const delayMs = retryAfterMs !== null && retryAfterMs >= 0 ? retryAfterMs : null;
   switch (category) {
     case "soft_rate_limit":
       return {
         kind:
-          retryAfterMs && retryAfterMs <= INSTANT_RETRY_THRESHOLD_MS
+          delayMs !== null && delayMs <= INSTANT_RETRY_THRESHOLD_MS
             ? "instant_retry_same_auth"
             : "soft_retry",
-        retryAfterMs: retryAfterMs ?? 2000,
+        retryAfterMs: delayMs ?? 2000,
         reason: "Soft rate limit — brief backoff",
       };
 
     case "rate_limited":
       return {
         kind:
-          retryAfterMs && retryAfterMs <= SHORT_COOLDOWN_MS
+          delayMs !== null && delayMs <= SHORT_COOLDOWN_MS
             ? "soft_retry"
             : "short_cooldown_switch_auth",
-        retryAfterMs: retryAfterMs ?? 60_000,
+        retryAfterMs: delayMs ?? 60_000,
         reason: "RPM rate limit — switch auth if cooldown is long",
       };
 
     case "quota_exhausted":
+      if (delayMs !== null && delayMs <= SHORT_COOLDOWN_MS) {
+        return {
+          kind: "soft_retry",
+          retryAfterMs: Math.max(delayMs, 2000),
+          reason: "Quota message with short reset — treat as burst retry",
+        };
+      }
       return {
         kind: "full_quota_exhausted",
-        retryAfterMs: retryAfterMs ?? FULL_QUOTA_COOLDOWN_MS,
+        retryAfterMs: delayMs ?? FULL_QUOTA_COOLDOWN_MS,
         reason: "Quota exhausted — skip this account",
       };
 
     default:
       return {
         kind: "soft_retry",
-        retryAfterMs: retryAfterMs ?? 5000,
+        retryAfterMs: delayMs ?? 5000,
         reason: "Unknown 429 — generic backoff",
       };
   }
