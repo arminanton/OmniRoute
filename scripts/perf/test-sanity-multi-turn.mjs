@@ -1,14 +1,16 @@
 import { Agent, setGlobalDispatcher } from "undici";
 import { getDeveloperScenario } from "./developer-scenarios.mjs";
 
+const CLIENT_TIMEOUT_MS = parseInt(process.env.OMNIROUTE_CLIENT_TIMEOUT_MS || "300000", 10);
+
 // Configure client dispatcher with high connection ceiling to avoid client-side socket bottlenecks
 setGlobalDispatcher(
   new Agent({
-    connections: 256,
+    connections: 512,
     pipelining: 1,
-    connectTimeout: 30000,
-    headersTimeout: 120000,
-    bodyTimeout: 120000,
+    connectTimeout: 45000,
+    headersTimeout: CLIENT_TIMEOUT_MS,
+    bodyTimeout: CLIENT_TIMEOUT_MS,
   })
 );
 
@@ -156,7 +158,9 @@ async function main() {
       );
     } else {
       failureCount++;
-      console.error(`[Agent Failure]:`, r.reason?.message || r.reason);
+      const err = r.reason;
+      const detail = err?.cause ? `${err.message} (cause: ${err.cause?.message || err.cause})` : (err?.message || String(err));
+      console.error(`[Agent Failure]:`, detail);
     }
   }
 
