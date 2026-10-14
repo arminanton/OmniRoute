@@ -113,20 +113,33 @@ async function runAgentSession(id) {
     messages.push({ role: "user", content: turnPrompt });
 
     const turnStart = Date.now();
-    const res = await fetch(ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${AUTH_KEY}`,
-        "Content-Type": "application/json",
-        "x-omniroute-session-id": sessionId,
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages,
-        max_tokens: MAX_TOKENS,
-        stream: USE_STREAM,
-      }),
-    });
+    let res;
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      try {
+        res = await fetch(ENDPOINT, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${AUTH_KEY}`,
+            "Content-Type": "application/json",
+            "x-omniroute-session-id": sessionId,
+          },
+          body: JSON.stringify({
+            model: MODEL,
+            messages,
+            max_tokens: MAX_TOKENS,
+            stream: USE_STREAM,
+          }),
+        });
+        break;
+      } catch (fetchErr) {
+        const isSocketReset = fetchErr?.cause?.code === "ECONNRESET" || String(fetchErr).includes("ECONNRESET");
+        if (isSocketReset && attempt < 2) {
+          await sleep(150 * (attempt + 1));
+          continue;
+        }
+        throw fetchErr;
+      }
+    }
 
     let reply = "";
     if (USE_STREAM) {
