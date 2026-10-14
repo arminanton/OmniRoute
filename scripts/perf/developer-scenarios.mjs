@@ -645,3 +645,37 @@ export function getDeveloperScenario(id) {
     turn2: `[Project Module ${cycle + 1}] ${base.turn2}`,
   };
 }
+
+/**
+ * Returns the contextual prompt for a given agent and turn index (0 to 9 for 10 turns).
+ * Guarantees cohesive subject continuity across all turns within the project.
+ */
+export function getDeveloperTurnPrompt(id, turnIndex) {
+  const scenario = getDeveloperScenario(id);
+  const topic = scenario.topic;
+
+  switch (turnIndex) {
+    case 0:
+      return scenario.turn1;
+    case 1:
+      return scenario.turn2;
+    case 2:
+      return `Now let's focus on error handling and boundary conditions for this ${topic}. What edge cases (e.g. empty inputs, buffer overflow, unexpected nulls, or connection drops) could occur, and how should we defensively guard against them in the code?`;
+    case 3:
+      return `Write a comprehensive unit test suite for this ${topic} implementation, including tests for typical use cases, boundary conditions, and error paths.`;
+    case 4:
+      return `How should we design micro-benchmarks to evaluate the throughput (operations per second) and memory allocation overhead of this ${topic}? What profiling tools should we use to identify CPU or memory bottlenecks?`;
+    case 5:
+      return `If this ${topic} is deployed in a high-concurrency production service with multiple concurrent worker threads or async tasks, what synchronization primitives or lock-free patterns ensure thread-safety without creating contention bottlenecks?`;
+    case 6:
+      return `How can we instrument this ${topic} with structured logging, distributed tracing spans, and Prometheus metrics (such as latency histograms and error counters) for production observability?`;
+    case 7:
+      return `Review this ${topic} implementation from a security and defensive programming perspective. Are there any risks like resource exhaustion, denial of service, or injection, and how should we mitigate them?`;
+    case 8:
+      return `How should this ${topic} be cleanly modularized, configured via environment variables or configuration files, and packaged for integration into the larger service?`;
+    case 9:
+      return `Finally, describe the operational runbook and graceful shutdown sequence for this ${topic}: how should in-flight operations be drained and resources cleanly released during rolling restarts or container teardowns?`;
+    default:
+      return `Can you summarize the key operational best practices and architectural considerations we have established for this ${topic}?`;
+  }
+}
