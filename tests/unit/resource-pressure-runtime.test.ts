@@ -491,4 +491,29 @@ describe("ResourcePressureRuntime stale-while-revalidate cache", () => {
     assert.equal(second.getObservation().signals?.observedAtMs, 2);
     second.dispose();
   });
+
+  it("triggers proactive GC compaction when heap exceeds threshold, admitting request if heap recedes", () => {
+    let gcCalls = 0;
+    let liveHeap = 250;
+    const runtime = createResourcePressureRuntime({
+      heapThresholdMb: 200,
+      immediateMemoryUsage: () => ({
+        rss: 300 * MiB,
+        heapTotal: 280 * MiB,
+        heapUsed: liveHeap * MiB,
+        external: 10 * MiB,
+        arrayBuffers: 1 * MiB,
+      }),
+      gc: () => {
+        gcCalls += 1;
+        liveHeap = 150; // compaction reclaims memory
+      },
+    });
+
+    const guard = runtime.check();
+    assert.equal(gcCalls, 1, "gc must be invoked when heap exceeds threshold");
+    assert.equal(guard, null, "request must proceed after GC drops heap below threshold");
+    runtime.dispose();
+  });
 });
+

@@ -34,11 +34,12 @@ if (runtimePolicy.mode === "locked") {
   childEnv.NODE_ENV = "production";
   // The locked bootstrap above requires the trusted WS/peer-stamp wrapper.
   const entry = "server-ws.mjs";
+  const maxOldSpaceMb = resolveMaxOldSpaceMb(childEnv.OMNIROUTE_MEMORY_MB, 2816);
   // Do not inherit execArgv or turn merged memory/loader settings into Node flags.
   // This protects executable/config integrity; it is not outbound enforcement.
   spawnWithForwardedSignals(
     process.execPath,
-    ["--dns-result-order=ipv4first", "--max-old-space-size=2048", entry],
+    ["--dns-result-order=ipv4first", "--expose-gc", `--max-old-space-size=${maxOldSpaceMb}`, entry],
     { stdio: "inherit", env: childEnv }
   );
 } else {
@@ -57,7 +58,7 @@ if (runtimePolicy.mode === "locked") {
   // rather than trusting the spoofable Host header.
   const entry = existsSync("server-ws.mjs") ? "server-ws.mjs" : "server.js";
 
-  spawnWithForwardedSignals("node", [entry], {
+  spawnWithForwardedSignals("node", ["--expose-gc", entry], {
     stdio: "inherit",
     env: childEnv,
   });

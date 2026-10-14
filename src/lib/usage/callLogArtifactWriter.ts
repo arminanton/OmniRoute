@@ -953,6 +953,9 @@ function ensureWorker(): Worker {
     active = null;
     releaseReservation(completed);
     let result = reply.result;
+    if (result) {
+      completed.artifact = null;
+    }
     if (!reply.result) {
       const reason = reply.failureReason ?? "no_result";
       if (reason !== "build_phase" && reason !== "storage_unavailable") {

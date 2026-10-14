@@ -78,6 +78,9 @@ function getDispatcherOptions() {
     // keepAliveTimeout UP to undici's default keepAliveMaxTimeout (600 s),
     // completely overriding the configured 1 s and restoring zombie-socket risk.
     keepAliveMaxTimeout: timeouts.fetchKeepAliveTimeoutMs,
+    // Undici default maxHeaderSize is 16KB. Responses with large auth tokens, cookies,
+    // or Google/OpenAI debugging headers overflow and fail with UND_ERR_HEADERS_OVERFLOW.
+    maxHeaderSize: 128 * 1024,
     // 9router#1237: RFC 8305 Happy Eyeballs. undici does not
     // enable it by default, so when DNS returns both AAAA (IPv6) and A (IPv4)
     // and the IPv6 route is broken (e.g. NAT64 `64:ff9b::` without routing),

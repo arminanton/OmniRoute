@@ -51,6 +51,7 @@ export type ResourcePressureRuntimeOptions = {
   maxStaleMs?: number;
   retryAfterMs?: number;
   samplerDeps?: SampleResourceSignalsDeps;
+  gc?: () => void;
 };
 
 export type ResourcePressureRuntime = {
@@ -328,6 +329,13 @@ export function createResourcePressureRuntime(
     schedule(refresh);
   };
 
+  let lastCompactingGcAtMs = 0;
+  const gcFn =
+    options.gc ??
+    (typeof (globalThis as unknown as { gc?: () => void }).gc === "function"
+      ? (globalThis as unknown as { gc: () => void }).gc
+      : null);
+
   return {
     check(context) {
       let immediateMemory: NodeJS.MemoryUsage | null = null;
@@ -344,6 +352,25 @@ export function createResourcePressureRuntime(
           heapUsedMb = 0;
         }
       }
+
+      if (heapThresholdMb != null && heapUsedMb > heapThresholdMb && gcFn) {
+        const now = nowMs();
+        if (now - lastCompactingGcAtMs >= 1500) {
+          lastCompactingGcAtMs = now;
+          try {
+            gcFn();
+            if (!options.immediateHeapUsedMb) {
+              try {
+                immediateMemory = immediateMemoryUsage();
+                heapUsedMb = immediateMemory ? immediateMemory.heapUsed / MB : heapUsedMb;
+              } catch {}
+            }
+          } catch {
+            // Ignore GC failures and proceed to evaluation
+          }
+        }
+      }
+
       const now = nowMs();
       const cacheAge = lastSignals ? Math.max(0, now - lastRefreshAtMs) : Number.POSITIVE_INFINITY;
       const immediate = immediateHeapGuard(
