@@ -261,11 +261,17 @@ function immediateHeapGuard(
   });
 }
 
+export function isResourcePressureDisabled(): boolean {
+  const env = process.env.OMNIROUTE_DISABLE_RESOURCE_PRESSURE;
+  return env === "1" || env === "true";
+}
+
 export function createResourcePressureRuntime(
   options: ResourcePressureRuntimeOptions = {}
 ): ResourcePressureRuntime {
-  const heapThresholdMb =
+  const rawThreshold =
     options.heapThresholdMb === undefined ? HEAP_PRESSURE_THRESHOLD_MB : options.heapThresholdMb;
+  const heapThresholdMb = rawThreshold === Infinity ? null : rawThreshold;
   if (heapThresholdMb !== null && (!Number.isFinite(heapThresholdMb) || heapThresholdMb <= 0)) {
     throw new RangeError("heapThresholdMb must be positive and finite or null");
   }
@@ -306,6 +312,15 @@ export function createResourcePressureRuntime(
     if (disposed || inFlight) return;
     scheduled = false;
     inFlight = Promise.resolve()
+      .then(() => {
+        // Automatic recovery: proactively trigger GC when elevated or critical
+        // to reclaim memory from completed requests before sampling.
+        if (gcFn && state.severity !== "normal") {
+          try {
+            gcFn();
+          } catch {}
+        }
+      })
       .then(sample)
       .then((signals) => {
         if (disposed) return;
@@ -338,6 +353,9 @@ export function createResourcePressureRuntime(
 
   return {
     check(context) {
+      if (isResourcePressureDisabled()) {
+        return null;
+      }
       let immediateMemory: NodeJS.MemoryUsage | null = null;
       try {
         immediateMemory = immediateMemoryUsage();
@@ -393,6 +411,31 @@ export function createResourcePressureRuntime(
         };
         return immediate;
       }
+
+      // Live recovery: If state was previously marked critical by the immediate absolute
+      // heap guard, but the live heap has now receded below the threshold, clear the critical latch.
+      if (state.reason === "v8_heap_absolute" && !immediate) {
+        state = emptyState();
+      }
+
+      // Watchdog auto-recovery: If critical state has lingered for > 10s and live heap is healthy,
+      // force recovery rather than trapping the process in a permanent 503 lockout.
+      if (state.severity === "critical" && now - state.lastTransitionAtMs > 10_000) {
+        if (heapThresholdMb == null || heapUsedMb <= heapThresholdMb) {
+          if (gcFn) {
+            try {
+              gcFn();
+            } catch {}
+          }
+          const durationSec = Math.round((now - state.lastTransitionAtMs) / 1000);
+          state = emptyState();
+          console.info(
+            `[resourcePressure] auto-recovery watchdog: critical state automatically cleared after ${durationSec}s (liveHeap=${Math.round(heapUsedMb)}MB)`
+          );
+          return null;
+        }
+      }
+
       if (cacheAge > maxStaleMs || state.severity !== "critical") {
         return null;
       }
@@ -409,7 +452,10 @@ export function createResourcePressureRuntime(
         })
       );
     },
-    getObservation: () => ({ signals: lastSignals, state }),
+    getObservation: () => ({
+      signals: lastSignals,
+      state: isResourcePressureDisabled() ? emptyState() : state,
+    }),
     whenRefreshSettled: async () => {
       if (scheduled) await new Promise<void>((resolve) => setImmediate(resolve));
       if (inFlight) await inFlight;

@@ -235,6 +235,12 @@ export type ChatAdmissionShedReason =
  */
 export function defaultPressureSeverity(correlationId?: string | null): PressureSeverity {
   try {
+    if (
+      process.env.OMNIROUTE_DISABLE_RESOURCE_PRESSURE === "1" ||
+      process.env.OMNIROUTE_DISABLE_RESOURCE_PRESSURE === "true"
+    ) {
+      return "normal";
+    }
     if (checkResourcePressureGuard({ correlationId })) return "critical";
     const severity = getResourcePressureObservation().state.severity;
     // check() is authoritative when its last observation has gone stale.

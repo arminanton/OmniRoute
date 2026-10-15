@@ -100,6 +100,12 @@ export function checkHeapPressureGuard(
   thresholdMb: number = HEAP_PRESSURE_THRESHOLD_MB,
   emitWarning = true
 ): HeapPressureGuardResult | null {
+  if (
+    process.env.OMNIROUTE_DISABLE_RESOURCE_PRESSURE === "1" ||
+    process.env.OMNIROUTE_DISABLE_RESOURCE_PRESSURE === "true"
+  ) {
+    return null;
+  }
   if (heapUsedMb <= thresholdMb) return null;
   if (emitWarning) {
     console.warn(

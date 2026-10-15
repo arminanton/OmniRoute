@@ -515,5 +515,79 @@ describe("ResourcePressureRuntime stale-while-revalidate cache", () => {
     assert.equal(guard, null, "request must proceed after GC drops heap below threshold");
     runtime.dispose();
   });
+
+  it("completely disables checks and observation severity when OMNIROUTE_DISABLE_RESOURCE_PRESSURE is set", () => {
+    process.env.OMNIROUTE_DISABLE_RESOURCE_PRESSURE = "1";
+    try {
+      const runtime = createResourcePressureRuntime({
+        heapThresholdMb: 200,
+        immediateHeapUsedMb: () => 500, // way above threshold
+        sample: async () => signals(1, 950), // critical ratio
+      });
+      assert.equal(runtime.check(), null, "check must return null when disabled");
+      assert.equal(runtime.getObservation().state.severity, "normal", "severity must be normal when disabled");
+      runtime.dispose();
+    } finally {
+      delete process.env.OMNIROUTE_DISABLE_RESOURCE_PRESSURE;
+    }
+  });
+
+  it("watchdog automatically clears prolonged critical state when live heap is healthy", async () => {
+    let now = 1000;
+    let liveHeap = 150;
+    let gcInvoked = 0;
+    const sampled = signals(1000, 950); // critical heap ratio
+    const runtime = createResourcePressureRuntime({
+      nowMs: () => now,
+      heapThresholdMb: 200,
+      thresholds: { sustainedSamplesCritical: 1 },
+      immediateHeapUsedMb: () => liveHeap,
+      sample: async () => sampled,
+      gc: () => {
+        gcInvoked += 1;
+      },
+    });
+
+    // 1. Force critical state via sampled signals
+    runtime.check();
+    await settleRefresh(runtime);
+    assert.equal(runtime.getObservation().state.severity, "critical");
+
+    // 2. Advance time by 11 seconds with healthy live heap
+    now += 11_000;
+
+    // 3. Next check should trigger watchdog auto-recovery
+    const recovered = runtime.check();
+    assert.equal(recovered, null, "watchdog must clear critical state and admit request");
+    assert.equal(runtime.getObservation().state.severity, "normal", "state must be restored to normal");
+    assert.ok(gcInvoked >= 1, "gc should be invoked during auto-recovery");
+    runtime.dispose();
+  });
+
+  it("proactively triggers GC in refresh when state is elevated or critical", async () => {
+    let gcCalls = 0;
+    let now = 100;
+    const sampled = signals(100, 950); // critical heap ratio
+    const runtime = createResourcePressureRuntime({
+      nowMs: () => now,
+      thresholds: { sustainedSamplesCritical: 1 },
+      sample: async () => sampled,
+      gc: () => {
+        gcCalls += 1;
+      },
+    });
+
+    runtime.check();
+    await settleRefresh(runtime);
+    assert.equal(runtime.getObservation().state.severity, "critical");
+
+    // Force another refresh while in critical state
+    now += 2000;
+    runtime.check();
+    await settleRefresh(runtime);
+    assert.ok(gcCalls >= 1, "refresh must trigger GC when state is critical to assist recovery");
+    runtime.dispose();
+  });
 });
+
 
