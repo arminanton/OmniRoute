@@ -1,4 +1,13 @@
 export const ANTIGRAVITY_PUBLIC_MODELS = Object.freeze([
+  {
+    id: "gemini-3.8-flash-high",
+    name: "Gemini 3.8 Flash (High)",
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+  },
   // Gemini 3.7 Flash tiers listed by the current official Antigravity model catalog.
   // Keep the upstream model ids unchanged so discovery and execution address the same
   // models selected by the native client.
