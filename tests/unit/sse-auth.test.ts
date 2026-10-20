@@ -73,6 +73,7 @@ function local404MarkFixture(settleWrite: (attempt: number) => Promise<void>) {
   const noop = () => {};
 
   Object.assign(imports, {
+    "@/shared/utils/circuitBreaker": { isLocalStreamLifecycleError: () => false },
     "@/shared/runtimePolicy": { isRuntimePolicyError },
     "@/lib/db/providers": {
       getProviderConnections: async () => [connection],

@@ -161,3 +161,65 @@ test("fill-first respects reactive family cooldown on Account 1 for Gemini while
     "Claude request must still route to Account 1 even when Gemini family is cooling down"
   );
 });
+
+test("sibling strategy resolution respects agy fill-first override even when antigravity has least-used", async () => {
+  const settingsDb = await import("../../src/lib/db/settings.ts");
+  await settingsDb.updateSettings({
+    providerStrategies: {
+      antigravity: { fallbackStrategy: "least-used" },
+      agy: { fallbackStrategy: "fill-first" },
+    },
+  });
+
+  // Account 1 and Account 2 are both active with full quota
+  const conn1Id = "conn-account-1";
+  const conn2Id = "conn-account-2";
+  await dbProviders.updateProviderConnection(conn1Id, {
+    providerSpecificData: {},
+    lastUsedAt: new Date(Date.now() - 1000).toISOString(),
+  });
+  await dbProviders.updateProviderConnection(conn2Id, {
+    providerSpecificData: {},
+    lastUsedAt: new Date(Date.now() - 50_000).toISOString(), // older lastUsedAt
+  });
+
+  // Calling with canonical provider "antigravity" on "agy" connections should resolve "fill-first" (Account 1 priority 1),
+  // NOT "least-used" (which would have picked Account 2 because of older lastUsedAt).
+  const creds = await auth.getProviderCredentials(
+    "antigravity",
+    null,
+    null,
+    "claude-opus-4-6-thinking"
+  );
+  assert.ok(creds);
+  assert.equal(
+    creds.connectionId,
+    conn1Id,
+    "Should resolve fill-first from agy connection/sibling and select Account 1"
+  );
+});
+
+test("fill-first does not rotate sequential requests to Account 2 when reserveOAuthSession is set", async () => {
+  const conn1Id = "conn-account-1";
+  const conn2Id = "conn-account-2";
+
+  for (let i = 0; i < 5; i++) {
+    const creds = await auth.getProviderCredentials(
+      "agy",
+      null,
+      null,
+      "agy/claude-sonnet-4-6",
+      {
+        sessionKey: `request-uuid-${i}`,
+        reserveOAuthSession: true,
+      }
+    );
+    assert.ok(creds);
+    assert.equal(
+      creds.connectionId,
+      conn1Id,
+      `Sequential turn ${i + 1} must stay on Account 1 under fill-first`
+    );
+    creds.releaseOAuthSession?.();
+  }
+});

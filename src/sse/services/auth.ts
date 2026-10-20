@@ -213,6 +213,7 @@ export interface CredentialSelectionOptions {
   excludeConnectionIds?: string[] | null;
   sessionKey?: string | null;
   sessionAffinityTtlMs?: number | null;
+  strategy?: string;
   reserveOAuthSession?: boolean;
   reserveAccountRequest?: boolean;
   lease?: CredentialLeaseSelectionContext;
@@ -1961,9 +1962,34 @@ export async function getProviderCredentials(
       string,
       { fallbackStrategy?: string; stickyRoundRobinLimit?: number }
     >;
-    const providerOverride = providerStrategyOverrides[resolvedId] || {};
+    const connectionProvider = orderedConnections[0]?.provider;
+    const siblingGroup =
+      PROVIDER_SEARCH_PAIRS.find(
+        (group) =>
+          group.includes(provider) ||
+          group.includes(resolvedId) ||
+          (connectionProvider ? group.includes(connectionProvider) : false)
+      ) || [];
+    const candidateStrategyKeys = [
+      connectionProvider,
+      provider,
+      resolvedId,
+      ...siblingGroup,
+    ].filter((k): k is string => Boolean(k));
+
+    let providerOverride: { fallbackStrategy?: string; stickyRoundRobinLimit?: number } = {};
+    for (const key of candidateStrategyKeys) {
+      const candidate = providerStrategyOverrides[key];
+      if (candidate && (candidate.fallbackStrategy || candidate.stickyRoundRobinLimit !== undefined)) {
+        providerOverride = candidate;
+        break;
+      }
+    }
     const strategy =
-      providerOverride.fallbackStrategy || settings.fallbackStrategy || "available-capacity";
+      options.strategy ||
+      providerOverride.fallbackStrategy ||
+      settings.fallbackStrategy ||
+      "available-capacity";
 
     let commitSelectionSideEffects: (() => Promise<void> | void) | undefined;
     let connection = leasePolicy.activeLease

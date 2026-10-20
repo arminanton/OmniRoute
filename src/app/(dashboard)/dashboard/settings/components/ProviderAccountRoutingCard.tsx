@@ -27,6 +27,11 @@ const STRATEGY_OPTIONS = ACCOUNT_FALLBACK_STRATEGY_VALUES.filter((v) =>
   ].includes(v)
 );
 
+const SIBLING_PROVIDER_KEYS: Record<string, string[]> = {
+  antigravity: ["agy"],
+  agy: ["antigravity"],
+};
+
 function clampProviderStickyLimit(raw: string): number {
   const val = parseInt(raw, 10);
   return Math.min(1000, Math.max(1, Number.isNaN(val) ? 3 : val));
@@ -38,11 +43,18 @@ async function fetchProviderOverride(
   const res = await fetch("/api/settings", { cache: "no-store" });
   if (!res.ok) return null;
   const data = await res.json();
-  return {
-    override: ((data?.providerStrategies || {}) as Record<string, ProviderStrategyOverride>)[
-      providerKey
-    ],
-  };
+  const strategies = (data?.providerStrategies || {}) as Record<string, ProviderStrategyOverride>;
+  const siblings = SIBLING_PROVIDER_KEYS[providerKey] || [];
+  let override = strategies[providerKey];
+  if (!override) {
+    for (const sib of siblings) {
+      if (strategies[sib]) {
+        override = strategies[sib];
+        break;
+      }
+    }
+  }
+  return { override };
 }
 
 /** Loads/saves the per-provider account-routing override. Extracted out of the
@@ -93,8 +105,14 @@ function useProviderAccountRoutingState(providerKey: string) {
           override.stickyRoundRobinLimit = clampProviderStickyLimit(nextSticky);
         }
         const updated = { ...current };
-        if (Object.keys(override).length === 0) delete updated[providerKey];
-        else updated[providerKey] = override;
+        const siblings = SIBLING_PROVIDER_KEYS[providerKey] || [];
+        if (Object.keys(override).length === 0) {
+          delete updated[providerKey];
+          for (const sib of siblings) delete updated[sib];
+        } else {
+          updated[providerKey] = override;
+          for (const sib of siblings) updated[sib] = override;
+        }
         const patchRes = await fetch("/api/settings", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
