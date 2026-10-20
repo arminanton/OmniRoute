@@ -97,9 +97,9 @@ export const waitForCooldownSettingsSchema = z
 export const comboCooldownWaitSettingsSchema = z
   .object({
     enabled: z.boolean().optional(),
-    maxWaitMs: z.number().int().min(0).max(30000).optional(),
+    maxWaitMs: z.number().int().min(0).max(900000).optional(),
     maxAttempts: z.number().int().min(0).max(10).optional(),
-    budgetMs: z.number().int().min(0).max(300000).optional(),
+    budgetMs: z.number().int().min(0).max(900000).optional(),
   })
   .strict();
 

@@ -361,13 +361,13 @@ export function normalizeComboCooldownWaitSettings(
   // live); anything the upstream itself reports as longer than this should
   // fall through to the existing 429 crystallization (and the cross-request
   // cooldown layers).
-  const maxWaitMs = toInteger(record.maxWaitMs, fallback.maxWaitMs, { min: 0, max: 300000 });
+  const maxWaitMs = toInteger(record.maxWaitMs, fallback.maxWaitMs, { min: 0, max: 900000 });
   const maxAttempts = toInteger(record.maxAttempts, fallback.maxAttempts, { min: 0, max: 10 });
   // Budget can never be smaller than a single wait, otherwise no wait could
   // ever fire; floor it at maxWaitMs.
   const budgetMs = toInteger(record.budgetMs, fallback.budgetMs, {
     min: maxWaitMs,
-    max: 5 * 60 * 1000,
+    max: 15 * 60 * 1000,
   });
   const enabled = toBoolean(record.enabled, fallback.enabled) && maxWaitMs > 0 && maxAttempts > 0;
 

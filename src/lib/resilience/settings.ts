@@ -110,18 +110,18 @@ export const DEFAULT_RESILIENCE_SETTINGS: ResilienceSettings = {
     maxRetries: 5,
     maxRetryWaitSec: 90,
     maxRetryWaitMs: 90000,
-    budgetMs: 300000,
+    budgetMs: 900000,
   },
   // Wait at most 90s for a single short transient cooldown (covers Gemini-class
   // TPM/RPM windows, which report ~60s retry-after live — #7360), at most 5
-  // redispatch cycles, never more than 300s (5 min) total. Active for every
+  // redispatch cycles, never more than 900s (15 min) total. Active for every
   // combo strategy when enabled, and only for transient (non quota_exhausted)
   // reasons.
   comboCooldownWait: {
     enabled: true,
     maxWaitMs: 90000,
     maxAttempts: 5,
-    budgetMs: 300000,
+    budgetMs: 900000,
   },
   // FASE 2.1: serialize concurrent quota-share requests per connection when the
   // connection sets a max_concurrent cap, so a subscription account is not
