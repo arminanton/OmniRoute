@@ -34,7 +34,7 @@ export function getAntigravityClaudeThinkingLevel(model: string, body: unknown):
   const config = record(request.generationConfig ?? root.generationConfig);
   const native = record(config.thinkingConfig).thinkingLevel;
   const explicit = root.reasoning_effort ?? record(root.reasoning).effort ??
-    record(root.output_config).effort ?? native;
+    record(root.output_config).effort ?? root.resolvedThinkingEffort ?? native;
   const value = explicit ?? splitAntigravityClaudeEffort(model).effort;
   const effort = typeof value === "string" ? value.toLowerCase() : "";
   return ANTIGRAVITY_CLAUDE_EFFORTS.includes(effort as AntigravityClaudeEffort)
@@ -42,7 +42,7 @@ export function getAntigravityClaudeThinkingLevel(model: string, body: unknown):
 }
 
 export function expandAntigravityClaudeEffortModels<T extends {
-  id: string; name: string; supportsAdaptiveThinking?: boolean;
+  id: string; name: string; supportsAdaptiveThinking?: boolean; supportsThinking?: boolean;
 }>(models: T[]): Array<T & { supportedThinkingEfforts?: string[] }> {
   const result = new Map<string, T & { supportedThinkingEfforts?: string[] }>();
   for (const model of models) {
@@ -50,7 +50,12 @@ export function expandAntigravityClaudeEffortModels<T extends {
     const split = splitAntigravityClaudeEffort(model.id);
     if (split.effort) continue;
     result.set(model.id, model);
-    if (!SELECTED_BASES.has(model.id) || model.supportsAdaptiveThinking !== true) continue;
+    if (
+      !SELECTED_BASES.has(model.id) ||
+      (model.supportsAdaptiveThinking !== true && model.supportsThinking !== true)
+    ) {
+      continue;
+    }
     result.set(model.id, { ...model, supportedThinkingEfforts: [...ANTIGRAVITY_CLAUDE_EFFORTS] });
     for (const effort of ANTIGRAVITY_CLAUDE_EFFORTS) {
       const id = `${model.id}-${effort}`;

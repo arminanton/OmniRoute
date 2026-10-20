@@ -1,4 +1,8 @@
 import { getProviderModels } from "../config/providerModels.ts";
+import {
+  splitAntigravityClaudeEffort,
+  isSelectedAntigravityClaudeModel,
+} from "../config/antigravityClaudeEffort.ts";
 
 const REGISTERED_EFFORT_SUFFIXES = ["none", "low", "medium", "high", "max", "xhigh"] as const;
 
@@ -13,6 +17,15 @@ export function getRegisteredProviderEffortBaseModelId(
   providerId: string,
   modelId: string
 ): string | null {
+  if (providerId === "antigravity" || providerId === "agy") {
+    if (isSelectedAntigravityClaudeModel(modelId)) {
+      const split = splitAntigravityClaudeEffort(modelId);
+      if (split.effort) {
+        return split.baseModel;
+      }
+    }
+  }
+
   const providerModels = getProviderModels(providerId);
   const registeredVariant = providerModels.find((candidate) => candidate.id === modelId);
 

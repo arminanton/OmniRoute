@@ -669,7 +669,11 @@ export class AntigravityExecutor extends BaseExecutor {
     for (const provider of ["agy", "antigravity"]) {
       const models = await getSyncedAvailableModelsForConnection(provider, connectionId);
       if (
-        models.some((entry) => entry.id === baseModel && entry.supportsAdaptiveThinking === true)
+        models.some(
+          (entry) =>
+            entry.id === baseModel &&
+            (entry.supportsAdaptiveThinking === true || entry.supportsThinking === true)
+        )
       ) {
         return true;
       }

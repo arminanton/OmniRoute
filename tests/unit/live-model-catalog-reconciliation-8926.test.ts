@@ -229,3 +229,15 @@ test("#12866: agy CLI catalog is visible after parseModel folds the prefix to an
     "antigravity live lookup must union the sibling agy CLI catalog"
   );
 });
+
+test("#8926: agy and antigravity claude effort variants resolve when base is in live catalog", async () => {
+  await seedProviderCatalog("agy", "agy-claude-catalog-test", ["claude-opus-4-6-thinking"]);
+
+  const resolvedAgy = await getModelInfo("agy/claude-opus-4-6-thinking-high");
+  assert.equal(resolvedAgy.errorType, undefined, resolvedAgy.errorMessage);
+  assert.equal(resolvedAgy.model, "claude-opus-4-6-thinking-high");
+
+  const resolvedAntigravity = await getModelInfo("antigravity/claude-opus-4-6-thinking-high");
+  assert.equal(resolvedAntigravity.errorType, undefined, resolvedAntigravity.errorMessage);
+  assert.equal(resolvedAntigravity.model, "claude-opus-4-6-thinking-high");
+});

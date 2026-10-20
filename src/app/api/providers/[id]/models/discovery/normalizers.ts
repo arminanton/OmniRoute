@@ -28,7 +28,10 @@ import {
   normalizeCodeAssistCatalogReply,
   type CodeAssistDiscoveredModel,
 } from "@omniroute/open-sse/services/codeAssistDiscovery.ts";
-import { expandAntigravityClaudeEffortModels } from "@omniroute/open-sse/config/antigravityClaudeEffort.ts";
+import {
+  expandAntigravityClaudeEffortModels,
+  isSelectedAntigravityClaudeModel,
+} from "@omniroute/open-sse/config/antigravityClaudeEffort.ts";
 
 const antigravityDiscoveryInflight = new Map<
   string,
@@ -83,7 +86,10 @@ export function mapAntigravityModelForClient(
     ...(typeof model.supportsPdf === "boolean" ? { supportsPdf: model.supportsPdf } : {}),
     ...(model.supportedMimeTypes ? { supportedMimeTypes: model.supportedMimeTypes } : {}),
     ...(model.discoveryRoles ? { discoveryRoles: model.discoveryRoles } : {}),
-    ...(model.supportsAdaptiveThinking === true ? { supportsAdaptiveThinking: true } : {}),
+    ...(model.supportsAdaptiveThinking === true ||
+    (isSelectedAntigravityClaudeModel(clientId) && model.supportsThinking === true)
+      ? { supportsAdaptiveThinking: true }
+      : {}),
     name:
       provider === "agy"
         ? getClientVisibleAgyModelName(clientId, model.name)
