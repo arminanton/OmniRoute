@@ -534,7 +534,7 @@ export async function runNonStreamingProviderLeg(
       httpStatus: failureStatus,
       errorType: null,
       usage: null,
-      termination: "provider_error",
+      termination: isRequestAborted ? "aborted" : "provider_error",
       latencyMs: Date.now() - startMs,
       startedAt,
       endedAt: new Date().toISOString(),

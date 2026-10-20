@@ -2129,6 +2129,25 @@ async function handleSingleModelChatImplementation(
         return successResponse;
       }
 
+      // Client abort (HTTP 499): caller dropped or cancelled the request.
+      // Do NOT retry, do NOT fall back to other accounts, do NOT call markAccountUnavailable,
+      // and do NOT lock out the model/provider.
+      const isRequestAborted =
+        result.status === 499 ||
+        result.error === "Request aborted" ||
+        Boolean(requestSignal?.aborted) ||
+        Boolean(clientRawRequest?.signal?.aborted) ||
+        isLocalStreamLifecycleError(result.error) ||
+        isLocalStreamLifecycleError(result.originalError);
+
+      if (isRequestAborted) {
+        releaseSelectedAccount();
+        return withSelectedConnectionHeader(
+          result.response ?? errorResponse(499, "Request aborted"),
+          credentials?.connectionId
+        );
+      }
+
       // proxyFetch already exhausted its fresh-dispatcher and allowed fallback paths.
       // Mark and return this exact JSON/SSE response before emergency fallback,
       // account health, breaker, cooldown, lockout, or combo routing can reclassify it.

@@ -10,6 +10,7 @@ import { nodeTypeFromId } from "@/lib/db/providerNodeSelect";
 import { hydrateCompatibleNodeBaseUrl } from "./compatibleNodeBaseUrl.ts";
 import { extractGoogApiKeyHeader } from "./googApiKeyAuth.ts";
 import { describeUpstreamFailure } from "@/shared/utils/upstreamError";
+import { isLocalStreamLifecycleError } from "@/shared/utils/circuitBreaker";
 import { looksLikeQuotaExhausted } from "@/shared/utils/classify429";
 import { buildAllExpiredCredentials } from "./authExpiredCredentials.ts";
 import {
@@ -2642,6 +2643,18 @@ export async function markAccountUnavailable(
       const { invalidateFreeAccessState } =
         await import("@omniroute/open-sse/services/autoCombo/freeAccessQuota.ts");
       invalidateFreeAccessState(provider, connectionId);
+    }
+
+    if (
+      status === 499 ||
+      errorText === "Request aborted" ||
+      isLocalStreamLifecycleError(errorText)
+    ) {
+      log.info(
+        "AUTH",
+        `${connectionId.slice(0, 8)} request aborted by client, skipping account cooldown`
+      );
+      return { shouldFallback: false, cooldownMs: 0 };
     }
 
     const resourceBypass = getResource404Bypass(status, errorText, connectionId, log);

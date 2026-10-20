@@ -45,15 +45,25 @@ import type { FailureKind } from "./classify429";
  */
 export function isLocalStreamLifecycleError(error: unknown): boolean {
   if (!error) return false;
-  const errName =
-    typeof (error as { name?: unknown }).name === "string"
-      ? ((error as { name: string }).name as string)
-      : "";
-  if (errName === "AbortError") return true;
+  if (typeof error === "object") {
+    const errObj = error as Record<string, unknown>;
+    const errName = typeof errObj.name === "string" ? errObj.name : "";
+    if (errName === "AbortError" || errName === "RequestAbortedError") return true;
+    const errCode = typeof errObj.code === "string" ? errObj.code : "";
+    if (
+      errCode === "UND_ERR_ABORTED" ||
+      errCode === "ERR_ABORTED" ||
+      errCode === "ABORT_ERR"
+    ) {
+      return true;
+    }
+    if (errObj.type === "aborted") return true;
+    if (errObj.cause && isLocalStreamLifecycleError(errObj.cause)) return true;
+  }
   const message =
     typeof error === "string"
       ? error
-      : typeof (error as { message?: unknown }).message === "string"
+      : typeof (error as { message?: unknown })?.message === "string"
         ? ((error as { message: string }).message as string)
         : "";
   if (!message) return false;
@@ -61,7 +71,11 @@ export function isLocalStreamLifecycleError(error: unknown): boolean {
     /controller is already closed/i.test(message) ||
     /request_signal_aborted/i.test(message) ||
     /client disconnected/i.test(message) ||
-    /operation was aborted/i.test(message)
+    /operation was aborted/i.test(message) ||
+    /request was aborted/i.test(message) ||
+    /request aborted/i.test(message) ||
+    /the operation was aborted/i.test(message) ||
+    /the user aborted a request/i.test(message)
   );
 }
 

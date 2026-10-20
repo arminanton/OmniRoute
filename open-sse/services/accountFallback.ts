@@ -38,6 +38,7 @@ import { resolveModelLockoutSettings } from "../../src/lib/resilience/modelLocko
 import {
   getAllCircuitBreakerStatuses,
   getCircuitBreaker,
+  isLocalStreamLifecycleError,
 } from "../../src/shared/utils/circuitBreaker";
 import {
   classify429FromError,
@@ -1726,6 +1727,18 @@ export function checkFallbackError(
    * always undefined for every other provider, so existing consumers are unaffected. */
   ruleScope?: "model" | "provider" | "connection";
 } {
+  if (
+    status === 499 ||
+    errorText === "Request aborted" ||
+    isLocalStreamLifecycleError(errorText)
+  ) {
+    return {
+      shouldFallback: false,
+      cooldownMs: 0,
+      reason: "request_aborted",
+      skipProviderBreaker: true,
+    };
+  }
   if (
     classifyUpstreamPolicyRejection({
       message: errorText,

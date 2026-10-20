@@ -3812,7 +3812,14 @@ async function handleChatCoreOwned({
               // must not turn its queued abort into a provider failure.
               if (clientRawRequest?.signal?.aborted) {
                 releaseAccountSemaphore();
-                throw clientRawRequest.signal.reason;
+                const abortReason =
+                  clientRawRequest.signal.reason instanceof Error
+                    ? clientRawRequest.signal.reason
+                    : typeof clientRawRequest.signal.reason === "string" &&
+                        clientRawRequest.signal.reason.length > 0
+                      ? new DOMException(clientRawRequest.signal.reason, "AbortError")
+                      : new DOMException("Request aborted", "AbortError");
+                throw abortReason;
               }
               if (
                 isLogicalRetryBudgetError(error) &&
@@ -4752,8 +4759,11 @@ async function handleChatCoreOwned({
       }
       // abort(reason) can reject with a raw string lacking `name`/`status`; classify
       // it through isLocalStreamLifecycleError so it maps to 499 rather than the
-      // 502 provider-failure default.
-      const isRequestAborted = isLocalStreamLifecycleError(error);
+      // 502 provider-failure default. Also check client and streamController signals directly.
+      const isRequestAborted =
+        Boolean(clientRawRequest?.signal?.aborted) ||
+        Boolean(streamController?.signal?.aborted) ||
+        isLocalStreamLifecycleError(error);
       // #8376: proxyFetch tags unreachable transport failures so they remain
       // distinguishable from ordinary provider 5xx responses.
       const isProxyUnreachableFailure =
@@ -4776,9 +4786,9 @@ async function handleChatCoreOwned({
           ? HTTP_STATUS.BAD_GATEWAY
           : localRateLimitFailure
             ? localRateLimitFailure.status
-            : error.name === "TimeoutError" || error.name === "BodyTimeoutError"
+            : error?.name === "TimeoutError" || error?.name === "BodyTimeoutError"
               ? HTTP_STATUS.GATEWAY_TIMEOUT
-              : error.status && typeof error.status === "number"
+              : error?.status && typeof error.status === "number"
                 ? error.status
                 : HTTP_STATUS.BAD_GATEWAY;
       const failureMessage = isRequestAborted
@@ -4793,7 +4803,7 @@ async function handleChatCoreOwned({
       // tags its pre-response timeout via the code below.)
       const isOwnDeadlineTimeout =
         failureStatus === HTTP_STATUS.GATEWAY_TIMEOUT &&
-        (error.name === "TimeoutError" || error.name === "BodyTimeoutError");
+        (error?.name === "TimeoutError" || error?.name === "BodyTimeoutError");
       const upstreamErrorType =
         upstreamErrorCode === ANTIGRAVITY_PRE_RESPONSE_TIMEOUT_CODE || isOwnDeadlineTimeout
           ? "upstream_timeout"
@@ -4804,7 +4814,7 @@ async function handleChatCoreOwned({
         model,
         provider,
         connectionId,
-        status: `FAILED ${failureStatus}`,
+        status: isRequestAborted ? "ABORTED 499" : `FAILED ${failureStatus}`,
       }).catch(() => {});
       persistAttemptLogs({
         status: failureStatus,
@@ -4816,7 +4826,9 @@ async function handleChatCoreOwned({
         // dashboard reads that field as "what the client received"), so omit it
         // for this case; `error` above already records the failure reason.
         clientResponse:
-          error.name === "AbortError" ? undefined : buildErrorBody(failureStatus, failureMessage),
+          isRequestAborted || error?.name === "AbortError"
+            ? undefined
+            : buildErrorBody(failureStatus, failureMessage),
         claudeCacheMeta: claudePromptCacheLogMeta,
         cacheSource: "upstream",
       });
