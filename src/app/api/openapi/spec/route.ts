@@ -117,7 +117,7 @@ export async function GET() {
   try {
     let specPath = "";
     for (const p of OPENAPI_SPEC_CANDIDATES) {
-      if (fs.existsSync(p)) {
+      if (fs.existsSync(/* turbopackIgnore: true */ p)) {
         specPath = p;
         break;
       }
@@ -127,7 +127,7 @@ export async function GET() {
       return NextResponse.json({ error: "openapi.yaml not found" }, { status: 404 });
     }
 
-    const stat = fs.statSync(specPath);
+    const stat = fs.statSync(/* turbopackIgnore: true */ specPath);
     const mtime = stat.mtimeMs;
 
     // Use cache if file hasn't changed
@@ -135,7 +135,7 @@ export async function GET() {
       return NextResponse.json(cachedSpec.data);
     }
 
-    const content = fs.readFileSync(specPath, "utf-8");
+    const content = fs.readFileSync(/* turbopackIgnore: true */ specPath, "utf-8");
     const raw: any = yaml.load(content);
 
     // Build a structured catalog

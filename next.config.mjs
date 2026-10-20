@@ -218,6 +218,22 @@ const nextConfig = {
         path: "**/open-sse/services/compression/**",
         description: /Overly broad patterns can lead to build performance issues/,
       },
+      {
+        path: "**/*",
+        title: /Dynamic filesystem access causes tracing of the whole project/,
+      },
+      {
+        path: "**/*",
+        title: /The file pattern .* matches \d+ files in \[project\]/,
+      },
+      {
+        path: "**/*",
+        description: /This can slow down deployments or lead to failures when size limits are exceeded/,
+      },
+      {
+        path: "**/*",
+        description: /Overly broad patterns can lead to build performance issues and over bundling/,
+      },
     ],
   },
   ...(isContributorBuild ? {} : { output: "standalone" }),
