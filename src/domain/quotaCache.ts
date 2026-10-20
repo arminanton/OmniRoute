@@ -267,6 +267,8 @@ function normalizeQuotas(rawQuotas: Record<string, any>): Record<string, QuotaIn
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
+export const ANTIGRAVITY_QUOTA_THRESHOLD_PERCENT = 95;
+
 export function __clearForTests() {
   getState().cache.clear();
 }
@@ -281,17 +283,33 @@ function resolveAntigravityQuotaWindowsForModel(
 function isAntigravityQuotaExhausted(
   connectionId: string,
   entry: QuotaCacheEntry,
-  requestedModel: string | null
+  requestedModel: string | null,
+  providerSpecificData?: unknown
 ): boolean {
   if (!requestedModel) return entry.exhausted;
   const quotaNames = Object.keys(entry.quotas || {});
   if (quotaNames.length === 0) return entry.exhausted;
   const matchingWindows = resolveAntigravityQuotaWindowsForModel(quotaNames, requestedModel);
+  const psd =
+    providerSpecificData && typeof providerSpecificData === "object"
+      ? (providerSpecificData as Record<string, unknown>)
+      : {};
+  const rawLimitPolicy =
+    psd.limitPolicy && typeof psd.limitPolicy === "object"
+      ? (psd.limitPolicy as Record<string, unknown>)
+      : null;
+  const configuredThreshold =
+    typeof rawLimitPolicy?.thresholdPercent === "number" &&
+    Number.isFinite(rawLimitPolicy.thresholdPercent)
+      ? rawLimitPolicy.thresholdPercent
+      : null;
+  const threshold = configuredThreshold ?? ANTIGRAVITY_QUOTA_THRESHOLD_PERCENT;
+
   return (
     matchingWindows.length > 0 &&
-    matchingWindows.every(
+    matchingWindows.some(
       (windowName) =>
-        getQuotaWindowStatus(connectionId, windowName, DEFAULT_QUOTA_THRESHOLD_PERCENT)
+        getQuotaWindowStatus(connectionId, windowName, threshold)
           ?.reachedThreshold
     )
   );
@@ -424,7 +442,12 @@ export function isQuotaExhaustedForRequest(
   }
 
   if (provider === "antigravity" || provider === "agy") {
-    return isAntigravityQuotaExhausted(connectionId, entry, requestedModel);
+    return isAntigravityQuotaExhausted(
+      connectionId,
+      entry,
+      requestedModel,
+      providerSpecificData
+    );
   }
 
   if (provider === "codex") {
@@ -640,7 +663,7 @@ export function getQuotaWindowStatus(
     reachedThreshold:
       windowExpired || window.fractionReported === false
         ? false
-        : remainingPercentage <= 0
+        : remainingPercentage <= 0 || remainingPercentage <= (100 - thresholdPercent)
           ? true
           : usedPercentage >= thresholdPercent,
   };

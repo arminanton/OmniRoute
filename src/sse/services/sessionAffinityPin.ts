@@ -485,6 +485,11 @@ export interface AffinityPinPredicates {
     connection: AffinityPinConnection,
     requestedModel: string | null
   ) => boolean;
+  /** auth.ts::isAntigravityFamilyUnavailable (antigravity per-family cooldown). */
+  isAntigravityFamilyUnavailable?: (
+    connection: AffinityPinConnection,
+    requestedModel: string | null
+  ) => boolean;
   /** Wraps auth.ts::evaluateQuotaLimitPolicy(...).blocked for one connection. */
   isQuotaPolicyBlocked: (connection: AffinityPinConnection) => boolean;
 }
@@ -522,6 +527,12 @@ function isConnectionEligibleForAffinityPin(
     if (!allowRateLimited && isAccountUnavailable(connection.rateLimitedUntil)) return false;
     if (params.isTerminalConnectionStatus(connection)) return false;
     if (provider === "codex" && params.isCodexScopeUnavailable(connection, requestedModel)) {
+      return false;
+    }
+    if (
+      (provider === "antigravity" || provider === "agy") &&
+      params.isAntigravityFamilyUnavailable?.(connection, requestedModel)
+    ) {
       return false;
     }
     if (requestedModel && isModelLocked(provider, connection.id, requestedModel)) return false;

@@ -114,7 +114,7 @@ test("isQuotaExhaustedForRequest scopes gemini exhaustion to the requested model
   quotaCache.setQuotaCache(connectionId, "antigravity", {
     "gemini-3.7-flash-medium": { remainingPercentage: 0, resetAt: null },
     "gemini-pro-agent": { remainingPercentage: 100, resetAt: null },
-    gemini_weekly: { remainingPercentage: 0, resetAt: null },
+    gemini_weekly: { remainingPercentage: 100, resetAt: null },
   });
 
   assert.equal(
@@ -134,6 +134,74 @@ test("isQuotaExhaustedForRequest scopes gemini exhaustion to the requested model
     ),
     false,
     "gemini-pro-agent should remain available when only gemini-3.7 Flash is depleted"
+  );
+});
+
+test("isQuotaExhaustedForRequest treats remaining <= 5% as exhausted for Antigravity", () => {
+  const connectionId = "conn-5percent-threshold-test";
+  quotaCache.setQuotaCache(connectionId, "antigravity", {
+    "gemini-3.8-flash-high": { remainingPercentage: 4.8, resetAt: null },
+    "gemini-3.1-flash-lite": { remainingPercentage: 6.0, resetAt: null },
+    "claude-sonnet-4-6": { remainingPercentage: 100, resetAt: null },
+    claude_gpt_weekly: { remainingPercentage: 100, resetAt: null },
+    gemini_weekly: { remainingPercentage: 50, resetAt: null },
+  });
+
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(
+      connectionId,
+      "antigravity",
+      "agy/gemini-3.8-flash-high"
+    ),
+    true,
+    "gemini-3.8-flash-high at 4.8% should be exhausted under the <= 5% threshold"
+  );
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(
+      connectionId,
+      "antigravity",
+      "agy/gemini-3.1-flash-lite"
+    ),
+    false,
+    "gemini-3.1-flash-lite at 6.0% should remain available (> 5%)"
+  );
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(
+      connectionId,
+      "antigravity",
+      "agy/claude-sonnet-4-6"
+    ),
+    false,
+    "claude-sonnet-4-6 at 100% should remain available"
+  );
+});
+
+test("isQuotaExhaustedForRequest marks Gemini family exhausted when weekly <= 5% while Claude remains available", () => {
+  const connectionId = "conn-weekly-depleted-test";
+  quotaCache.setQuotaCache(connectionId, "antigravity", {
+    "gemini-3.8-flash-high": { remainingPercentage: 80, resetAt: null },
+    gemini_weekly: { remainingPercentage: 3.5, resetAt: null },
+    "claude-sonnet-4-6": { remainingPercentage: 100, resetAt: null },
+    claude_gpt_weekly: { remainingPercentage: 100, resetAt: null },
+  });
+
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(
+      connectionId,
+      "antigravity",
+      "agy/gemini-3.8-flash-high"
+    ),
+    true,
+    "Gemini models should be exhausted when gemini_weekly <= 5%"
+  );
+  assert.equal(
+    quotaCache.isQuotaExhaustedForRequest(
+      connectionId,
+      "antigravity",
+      "agy/claude-sonnet-4-6"
+    ),
+    false,
+    "Claude models should remain available when gemini_weekly is exhausted"
   );
 });
 

@@ -75,7 +75,7 @@ export async function persistAntigravityFamilyCooldown(params: {
   return nextPsd;
 }
 
-/** Fire-and-forget family PSD write. RPM/burst 429s must pass reason !== quota_exhausted. */
+/** Fire-and-forget family PSD write. Persists on quota_exhausted or rate_limited. */
 export function persistAntigravityFamilyCooldownIfQuota(params: {
   provider?: string | null;
   connectionId: string;
@@ -85,12 +85,45 @@ export function persistAntigravityFamilyCooldownIfQuota(params: {
 }): void {
   if (!isAntigravityQuotaProvider(params.provider)) return;
   if (!params.model?.trim() || params.cooldownMs <= 0) return;
-  if (params.reason != null && params.reason !== "quota_exhausted") return;
+  if (
+    params.reason != null &&
+    params.reason !== "quota_exhausted" &&
+    params.reason !== "rate_limited"
+  ) {
+    return;
+  }
   void persistAntigravityFamilyCooldown({
     connectionId: params.connectionId,
     model: params.model,
     rateLimitedUntil: new Date(Date.now() + params.cooldownMs).toISOString(),
   }).catch(() => {});
+}
+
+export function isAntigravityFamilyUnavailable(
+  connection: { providerSpecificData?: unknown },
+  model: string | null | undefined,
+  now: number = Date.now()
+): boolean {
+  if (!model) return false;
+  const family = getAntigravityQuotaFamily(model);
+  if (family === "other") return false;
+  const psd = asRecord(connection?.providerSpecificData);
+  const untils = asRecord(psd[FAMILY_PSD_KEY]);
+  const untilMs = parseUntilMs(untils[family]);
+  return Number.isFinite(untilMs) && untilMs > now;
+}
+
+export function getAntigravityFamilyCooldown(
+  connection: { providerSpecificData?: unknown },
+  model: string | null | undefined
+): string | null {
+  if (!model) return null;
+  const family = getAntigravityQuotaFamily(model);
+  if (family === "other") return null;
+  const psd = asRecord(connection?.providerSpecificData);
+  const untils = asRecord(psd[FAMILY_PSD_KEY]);
+  const until = untils[family];
+  return typeof until === "string" ? until : null;
 }
 
 export async function persistAntigravityPreflightFamilyLock(params: {

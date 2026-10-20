@@ -67,6 +67,8 @@ import {
 import {
   rehydrateAntigravityFamilyLocksForConnections,
   persistAntigravityFamilyCooldownIfQuota,
+  isAntigravityFamilyUnavailable,
+  getAntigravityFamilyCooldown,
 } from "@omniroute/open-sse/services/antigravityFamilyCooldown.ts";
 import { markQuotaPreflightAccountUnavailable } from "./quotaPreflightUnavailable.ts";
 import { getCreditsMode } from "@omniroute/open-sse/services/antigravityCredits.ts";
@@ -230,6 +232,7 @@ interface CooldownInspectionState {
   connection: ProviderConnectionView;
   connectionCooldownMs: number | null;
   codexScopeCooldownMs: number | null;
+  antigravityFamilyCooldownMs: number | null;
   retryableModelCooldownMs: number | null;
 }
 const MIN_QUOTA_THRESHOLD_PERCENT = 1;
@@ -1326,6 +1329,9 @@ export async function getProviderCredentials(
           excludedConnectionIds,
           isTerminalConnectionStatus,
           isCodexScopeUnavailable,
+          isAntigravityFamilyUnavailable: (c, m) =>
+            (provider === "antigravity" || provider === "agy") &&
+            isAntigravityFamilyUnavailable(c, m),
           isQuotaPolicyBlocked: (c) =>
             evaluateQuotaLimitPolicy(provider, c as ProviderConnectionView, requestedModel).blocked,
         }) ?? forcedConnectionId;
@@ -1537,6 +1543,14 @@ export async function getProviderCredentials(
           connectionFilterStatus.set(c.id, "codexScopeLimited");
           return false;
         }
+        if (
+          (provider === "antigravity" || provider === "agy") &&
+          isAntigravityFamilyUnavailable(c, requestedModel)
+        ) {
+          connectionFilterStatus.set(c.id, "antigravityFamilyLimited");
+          familyLockedCount += 1;
+          return false;
+        }
         // Per-model lockout: if this specific model/family is locked on this connection, skip it
         if (
           requestedModel &&
@@ -1587,6 +1601,7 @@ export async function getProviderCredentials(
       const rateLimited = status === "rateLimited";
       const terminalStatus = status === "terminalStatus";
       const codexScopeLimited = status === "codexScopeLimited";
+      const antigravityFamilyLimited = status === "antigravityFamilyLimited";
       const modelLocked = status === "modelLocked";
       const modelExcluded = status === "modelExcluded";
       const modelNotAdvertised = status === "modelNotAdvertised";
@@ -1620,6 +1635,14 @@ export async function getProviderCredentials(
             ? `  → ${c.id?.slice(0, 8)} | retained codex scope-limited account until ${scopeUntil} for combo live test`
             : `  → ${c.id?.slice(0, 8)} | codex scope-limited until ${scopeUntil}`
         );
+      } else if (antigravityFamilyLimited) {
+        const familyUntil = getAntigravityFamilyCooldown(c, requestedModel);
+        log.debug(
+          "AUTH",
+          allowSuppressedConnections
+            ? `  → ${c.id?.slice(0, 8)} | retained antigravity family-limited account until ${familyUntil} for combo live test`
+            : `  → ${c.id?.slice(0, 8)} | antigravity family-limited until ${familyUntil}`
+        );
       } else if (modelLocked) {
         const lockout = getModelLockoutInfo(provider, c.id, requestedModel);
         log.debug(
@@ -1638,6 +1661,10 @@ export async function getProviderCredentials(
           provider === "codex"
             ? parseFutureDateMs(getCodexChildCooldown(connection, requestedModel))
             : null;
+        const antigravityFamilyCooldownMs =
+          provider === "antigravity" || provider === "agy"
+            ? parseFutureDateMs(getAntigravityFamilyCooldown(connection, requestedModel))
+            : null;
         const modelLockout = requestedModel
           ? getModelLockoutInfo(provider, connection.id, requestedModel)
           : null;
@@ -1648,7 +1675,13 @@ export async function getProviderCredentials(
             ? Date.now() + modelLockout.remainingMs
             : null;
 
-        return { connection, connectionCooldownMs, codexScopeCooldownMs, retryableModelCooldownMs };
+        return {
+          connection,
+          connectionCooldownMs,
+          codexScopeCooldownMs,
+          antigravityFamilyCooldownMs,
+          retryableModelCooldownMs,
+        };
       });
 
       const cooldownCandidates = cooldownStates
@@ -1659,6 +1692,9 @@ export async function getProviderCredentials(
           }
           if (state.codexScopeCooldownMs !== null) {
             candidates.push({ ms: state.codexScopeCooldownMs, connection: state.connection });
+          }
+          if (state.antigravityFamilyCooldownMs !== null) {
+            candidates.push({ ms: state.antigravityFamilyCooldownMs, connection: state.connection });
           }
           if (state.retryableModelCooldownMs !== null) {
             candidates.push({ ms: state.retryableModelCooldownMs, connection: state.connection });
@@ -1672,7 +1708,9 @@ export async function getProviderCredentials(
         cooldownStates.length > 0 &&
         cooldownStates.every((state) => {
           const hasModelSpecificCooldown =
-            state.codexScopeCooldownMs !== null || state.retryableModelCooldownMs !== null;
+            state.codexScopeCooldownMs !== null ||
+            state.antigravityFamilyCooldownMs !== null ||
+            state.retryableModelCooldownMs !== null;
           return hasModelSpecificCooldown && state.connectionCooldownMs === null;
         });
 
