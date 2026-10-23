@@ -28,9 +28,15 @@ export function getAntigravityQuotaFamily(
   if (
     bare.startsWith("claude-") ||
     bare.startsWith("cloud-") ||
+    bare.startsWith("gpt-") ||
+    bare.startsWith("o1-") ||
+    bare.startsWith("o3-") ||
     bare.includes("/claude-") ||
     bare.includes("/cloud-") ||
-    bare.includes("anthropic")
+    bare.includes("/gpt-") ||
+    bare.includes("anthropic") ||
+    bare.includes("openai") ||
+    bare.includes("gpt")
   ) {
     return "claude";
   }

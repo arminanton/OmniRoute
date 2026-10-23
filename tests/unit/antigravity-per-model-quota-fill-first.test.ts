@@ -223,3 +223,170 @@ test("fill-first does not rotate sequential requests to Account 2 when reserveOA
     creds.releaseOAuthSession?.();
   }
 });
+
+test("fill-first routes new sessions to Account 1 rather than round-robining via LRU", async () => {
+  const conn1Id = "conn-account-1";
+  const conn2Id = "conn-account-2";
+
+  // Reset lastUsedAt to make Account 2 look older (LRU candidate)
+  await dbProviders.updateProviderConnection(conn1Id, {
+    lastUsedAt: new Date(Date.now() - 1_000).toISOString(),
+  });
+  await dbProviders.updateProviderConnection(conn2Id, {
+    lastUsedAt: new Date(Date.now() - 600_000).toISOString(),
+  });
+
+  // Ensure full quota for both
+  quotaCache.setQuotaCache(conn1Id, "agy", {
+    "claude-sonnet-4-6": { remainingPercentage: 100, resetAt: null },
+    claude_gpt_weekly: { remainingPercentage: 100, resetAt: null },
+  });
+  quotaCache.setQuotaCache(conn2Id, "agy", {
+    "claude-sonnet-4-6": { remainingPercentage: 100, resetAt: null },
+    claude_gpt_weekly: { remainingPercentage: 100, resetAt: null },
+  });
+
+  // 3 distinct sessions with sessionAffinityTtlMs=60000 under fill-first:
+  // All 3 must pick Priority 1 (conn1Id) instead of LRU rotating to conn2Id!
+  for (const sKey of ["session-test-alpha", "session-test-beta", "session-test-gamma"]) {
+    const creds = await auth.getProviderCredentials(
+      "agy",
+      null,
+      null,
+      "agy/claude-sonnet-4-6",
+      {
+        sessionKey: sKey,
+        sessionAffinityTtlMs: 60_000,
+        strategy: "fill-first",
+      }
+    );
+    assert.ok(creds);
+    assert.equal(
+      creds.connectionId,
+      conn1Id,
+      `New session ${sKey} must start on Account 1 under fill-first, not LRU`
+    );
+  }
+});
+
+test("model family lanes maintain separate session affinity pins without clobbering each other", async () => {
+  const { clearAllModelLockouts } = await import(
+    "@omniroute/open-sse/services/accountFallback.ts"
+  );
+  clearAllModelLockouts();
+
+  const conn1Id = "conn-account-1";
+  const conn2Id = "conn-account-2";
+
+  await dbProviders.updateProviderConnection(conn1Id, {
+    providerSpecificData: {},
+    rateLimitedUntil: null,
+  });
+  await dbProviders.updateProviderConnection(conn2Id, {
+    providerSpecificData: {},
+    rateLimitedUntil: null,
+  });
+
+  // Account 1 has Gemini quota (90%), but Claude quota exhausted (3%)
+  quotaCache.setQuotaCache(conn1Id, "agy", {
+    "gemini-3.8-flash-high": { remainingPercentage: 90, resetAt: null },
+    gemini_weekly: { remainingPercentage: 90, resetAt: null },
+    "claude-sonnet-4-6": { remainingPercentage: 3, resetAt: null },
+    claude_gpt_weekly: { remainingPercentage: 3, resetAt: null },
+  });
+
+  // Account 2 has full quota on both
+  quotaCache.setQuotaCache(conn2Id, "agy", {
+    "gemini-3.8-flash-high": { remainingPercentage: 100, resetAt: null },
+    gemini_weekly: { remainingPercentage: 100, resetAt: null },
+    "claude-sonnet-4-6": { remainingPercentage: 100, resetAt: null },
+    claude_gpt_weekly: { remainingPercentage: 100, resetAt: null },
+  });
+
+  const sessionKey = "session-mixed-lanes-123";
+
+  // 1. Send Gemini request in session-mixed-lanes-123
+  // Account 1 has Gemini quota -> routes to Account 1 and pins gemini lane
+  const geminiTurn1 = await auth.getProviderCredentials(
+    "agy",
+    null,
+    null,
+    "agy/gemini-3.8-flash-high",
+    {
+      sessionKey,
+      sessionAffinityTtlMs: 60_000,
+      strategy: "fill-first",
+    }
+  );
+  assert.ok(geminiTurn1);
+  assert.equal(geminiTurn1.connectionId, conn1Id, "Gemini turn 1 must route to Account 1");
+
+  // 2. Send Claude request in the SAME session-mixed-lanes-123
+  // Account 1 has Claude quota exhausted -> routes to Account 2 and pins claude lane
+  const claudeTurn1 = await auth.getProviderCredentials(
+    "agy",
+    null,
+    null,
+    "agy/claude-sonnet-4-6",
+    {
+      sessionKey,
+      sessionAffinityTtlMs: 60_000,
+      strategy: "fill-first",
+    }
+  );
+  assert.ok(claudeTurn1);
+  assert.equal(claudeTurn1.connectionId, conn2Id, "Claude turn 1 must route to Account 2");
+
+  // 3. Send Gemini request again in the SAME session-mixed-lanes-123
+  // Must STILL route to Account 1 (Gemini pin preserved, not overwritten by Claude!)
+  const geminiTurn2 = await auth.getProviderCredentials(
+    "agy",
+    null,
+    null,
+    "agy/gemini-3.8-flash-high",
+    {
+      sessionKey,
+      sessionAffinityTtlMs: 60_000,
+      strategy: "fill-first",
+    }
+  );
+  assert.ok(geminiTurn2);
+  assert.equal(
+    geminiTurn2.connectionId,
+    conn1Id,
+    "Gemini turn 2 must STILL route to Account 1 via gemini affinity pin"
+  );
+
+  // 4. Send Claude request again in the SAME session-mixed-lanes-123
+  // Must STILL route to Account 2 (Claude pin preserved, not overwritten by Gemini!)
+  const claudeTurn2 = await auth.getProviderCredentials(
+    "agy",
+    null,
+    null,
+    "agy/claude-sonnet-4-6",
+    {
+      sessionKey,
+      sessionAffinityTtlMs: 60_000,
+      strategy: "fill-first",
+    }
+  );
+  assert.ok(claudeTurn2);
+  assert.equal(
+    claudeTurn2.connectionId,
+    conn2Id,
+    "Claude turn 2 must STILL route to Account 2 via claude affinity pin"
+  );
+});
+
+test("gpt models in Antigravity are classified under the Claude/GPT family quota lane", async () => {
+  const { getAntigravityQuotaFamily } = await import(
+    "@omniroute/open-sse/services/antigravityQuotaFamily.ts"
+  );
+
+  assert.equal(getAntigravityQuotaFamily("gpt-4o"), "claude");
+  assert.equal(getAntigravityQuotaFamily("gpt-oss-120b-medium"), "claude");
+  assert.equal(getAntigravityQuotaFamily("agy/gpt-4o"), "claude");
+  assert.equal(getAntigravityQuotaFamily("antigravity/o1-preview"), "claude");
+  assert.equal(getAntigravityQuotaFamily("o3-mini"), "claude");
+  assert.equal(getAntigravityQuotaFamily("gemini-2.5-pro"), "gemini");
+});

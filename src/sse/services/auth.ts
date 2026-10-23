@@ -61,6 +61,7 @@ import {
 } from "@/domain/quotaCache";
 import { isClaudeExtraUsageAllowed } from "@/lib/providers/claudeExtraUsage";
 import {
+  getAntigravityQuotaFamily,
   getQuotaScopeLabelForProvider,
   isAntigravityQuotaProvider,
 } from "@omniroute/open-sse/services/antigravityQuotaFamily.ts";
@@ -1948,21 +1949,11 @@ export async function getProviderCredentials(
         : null;
     }
 
-    const orderedConnections = [...leasePolicy.connections].sort((a, b) => {
-      if (a.authType !== "oauth" || b.authType !== "oauth") return 0;
-      const priorityDelta = (a.priority || 999) - (b.priority || 999);
-      if (priorityDelta !== 0) return priorityDelta;
-      return (
-        getOAuthSessionAvailability(b.id, options.sessionKey) -
-        getOAuthSessionAvailability(a.id, options.sessionKey)
-      );
-    });
-
     const providerStrategyOverrides = (settings.providerStrategies || {}) as Record<
       string,
       { fallbackStrategy?: string; stickyRoundRobinLimit?: number }
     >;
-    const connectionProvider = orderedConnections[0]?.provider;
+    const connectionProvider = leasePolicy.connections[0]?.provider;
     const siblingGroup =
       PROVIDER_SEARCH_PAIRS.find(
         (group) =>
@@ -1991,6 +1982,28 @@ export async function getProviderCredentials(
       settings.fallbackStrategy ||
       "available-capacity";
 
+    const orderedConnections = [...leasePolicy.connections].sort((a, b) => {
+      const priorityDelta = (a.priority || 999) - (b.priority || 999);
+      if (priorityDelta !== 0) return priorityDelta;
+      if (
+        (strategy === "fill-first" && (provider === "antigravity" || provider === "agy")) ||
+        provider === "antigravity" ||
+        provider === "agy"
+      ) {
+        return a.id.localeCompare(b.id);
+      }
+      if (a.authType !== "oauth" || b.authType !== "oauth") return 0;
+      return (
+        getOAuthSessionAvailability(b.id, options.sessionKey) -
+        getOAuthSessionAvailability(a.id, options.sessionKey)
+      );
+    });
+
+    const antigravityFamily =
+      provider === "antigravity" || provider === "agy"
+        ? getAntigravityQuotaFamily(requestedModel)
+        : null;
+
     let commitSelectionSideEffects: (() => Promise<void> | void) | undefined;
     let connection = leasePolicy.activeLease
       ? orderedConnections.find(
@@ -2003,7 +2016,9 @@ export async function getProviderCredentials(
             provider,
             options.sessionKey,
             orderedConnections,
-            sessionAffinityTtlMs
+            sessionAffinityTtlMs,
+            strategy,
+            antigravityFamily
           )
         : null;
     const affinityConnection = connection
@@ -2014,7 +2029,9 @@ export async function getProviderCredentials(
             provider,
             options.sessionKey,
             orderedConnections,
-            sessionAffinityTtlMs
+            sessionAffinityTtlMs,
+            strategy,
+            antigravityFamily
           );
     if (affinityConnection) {
       connection = affinityConnection;
@@ -2194,7 +2211,8 @@ export async function getProviderCredentials(
       options.reserveOAuthSession === true &&
       connection?.authType === "oauth" &&
       !affinityConnection &&
-      strategy !== "available-capacity"
+      strategy !== "available-capacity" &&
+      !(provider === "antigravity" || provider === "agy")
     ) {
       const selectedPriority = connection.priority || 999;
       const selectedAvailability = getOAuthSessionAvailability(connection.id, options.sessionKey);

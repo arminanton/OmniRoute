@@ -37,7 +37,8 @@ import {
 } from "@/lib/db/sessionAccountAffinity";
 import { touchConnectionLastUsed } from "@/lib/db/providers";
 import { isModelExcludedByConnection } from "@/domain/connectionModelRules";
-import { isAccountQuotaExhausted } from "@/domain/quotaCache";
+import { isAccountQuotaExhausted, isQuotaExhaustedForRequest } from "@/domain/quotaCache";
+import { getAntigravityQuotaFamily } from "@omniroute/open-sse/services/antigravityQuotaFamily.ts";
 import {
   isAccountUnavailable,
   isModelLocked,
@@ -274,22 +275,24 @@ export async function selectSessionAffinityConnection<T extends SessionAffinityC
   provider: string,
   sessionKey: string | null | undefined,
   connections: T[],
-  ttlMs = 0
+  ttlMs = 0,
+  strategy = "fill-first",
+  family: string | null = null
 ): Promise<T | null> {
   if (!sessionKey || connections.length === 0 || ttlMs <= 0) return null;
 
-  const existing = getSessionAccountAffinity(sessionKey, provider, ttlMs);
+  const existing = getSessionAccountAffinity(sessionKey, provider, ttlMs, Date.now(), family);
   if (existing) {
     const connection = connections.find((candidate) => candidate.id === existing.connectionId);
     if (connection) {
-      touchSessionAccountAffinity(sessionKey, provider, Date.now(), ttlMs);
+      touchSessionAccountAffinity(sessionKey, provider, Date.now(), ttlMs, family);
       const nextCount = (connection.consecutiveUseCount || 0) + 1;
       await touchConnectionLastUsed(connection.id, nextCount);
       connection.lastUsedAt = new Date().toISOString();
       connection.consecutiveUseCount = nextCount;
       log.info(
         "AUTH",
-        `session_key=${formatSessionKeyForLog(sessionKey)} -> connection ${connection.id.slice(
+        `session_key=${formatSessionKeyForLog(sessionKey)} [family=${family || "all"}] -> connection ${connection.id.slice(
           0,
           8
         )} (affinity)`
@@ -297,17 +300,20 @@ export async function selectSessionAffinityConnection<T extends SessionAffinityC
       return connection;
     }
 
-    deleteSessionAccountAffinity(sessionKey, provider);
+    deleteSessionAccountAffinity(sessionKey, provider, family);
     log.info(
       "AUTH",
-      `affinity cleared for session_key=${formatSessionKeyForLog(sessionKey)} provider=${provider}`
+      `affinity cleared for session_key=${formatSessionKeyForLog(sessionKey)} provider=${provider} family=${family || "all"}`
     );
   }
 
-  const connection = [...connections].sort(compareLruConnections)[0] ?? null;
+  const connection =
+    strategy === "fill-first"
+      ? connections[0]
+      : ([...connections].sort(compareLruConnections)[0] ?? null);
   if (!connection) return null;
 
-  upsertSessionAccountAffinity(sessionKey, provider, connection.id, Date.now(), ttlMs);
+  upsertSessionAccountAffinity(sessionKey, provider, connection.id, Date.now(), ttlMs, family);
   await touchConnectionLastUsed(connection.id, 1);
   connection.lastUsedAt = new Date().toISOString();
   connection.consecutiveUseCount = 1;
@@ -315,7 +321,7 @@ export async function selectSessionAffinityConnection<T extends SessionAffinityC
     "AUTH",
     `new affinity created for session_key=${formatSessionKeyForLog(
       sessionKey
-    )} -> connection ${connection.id.slice(0, 8)}`
+    )} [family=${family || "all"}] -> connection ${connection.id.slice(0, 8)}`
   );
   return connection;
 }
@@ -328,28 +334,34 @@ export function planSessionAffinityConnection<T extends SessionAffinityConnectio
   provider: string,
   sessionKey: string | null | undefined,
   connections: T[],
-  ttlMs = 0
+  ttlMs = 0,
+  strategy = "fill-first",
+  family: string | null = null
 ) {
   if (!sessionKey || connections.length === 0 || ttlMs <= 0) return null;
-  const existing = getSessionAccountAffinity(sessionKey, provider, ttlMs);
+  const existing = getSessionAccountAffinity(sessionKey, provider, ttlMs, Date.now(), family);
   const existingConnection =
     existing && connections.find((candidate) => candidate.id === existing.connectionId);
-  const connection = existingConnection ?? [...connections].sort(compareLruConnections)[0] ?? null;
+  const connection =
+    existingConnection ??
+    (strategy === "fill-first"
+      ? connections[0]
+      : ([...connections].sort(compareLruConnections)[0] ?? null));
   if (!connection) return null;
 
   return {
     connection,
     commit: async () => {
       if (existingConnection) {
-        touchSessionAccountAffinity(sessionKey, provider, Date.now(), ttlMs);
+        touchSessionAccountAffinity(sessionKey, provider, Date.now(), ttlMs, family);
         const nextCount = (connection.consecutiveUseCount || 0) + 1;
         await touchConnectionLastUsed(connection.id, nextCount);
         connection.lastUsedAt = new Date().toISOString();
         connection.consecutiveUseCount = nextCount;
         return;
       }
-      if (existing) deleteSessionAccountAffinity(sessionKey, provider);
-      upsertSessionAccountAffinity(sessionKey, provider, connection.id, Date.now(), ttlMs);
+      if (existing) deleteSessionAccountAffinity(sessionKey, provider, family);
+      upsertSessionAccountAffinity(sessionKey, provider, connection.id, Date.now(), ttlMs, family);
       await touchConnectionLastUsed(connection.id, 1);
       connection.lastUsedAt = new Date().toISOString();
       connection.consecutiveUseCount = 1;
@@ -465,12 +477,13 @@ export function refreshSuccessfulSessionAffinity(params: {
   connectionId: string | null | undefined;
   settings: AffinityPinSettings;
   now?: number;
+  family?: string | null;
 }): boolean {
-  const { provider, sessionKey, connectionId, settings, now = Date.now() } = params;
+  const { provider, sessionKey, connectionId, settings, now = Date.now(), family } = params;
   if (!sessionKey || !connectionId) return false;
   const ttlMs = resolveSessionAffinityTtlMs(provider, {}, settings);
   if (ttlMs <= 0) return false;
-  return refreshSessionAccountAffinityForConnection(sessionKey, provider, connectionId, now, ttlMs);
+  return refreshSessionAccountAffinityForConnection(sessionKey, provider, connectionId, now, ttlMs, family);
 }
 
 /**
@@ -537,7 +550,16 @@ function isConnectionEligibleForAffinityPin(
     }
     if (requestedModel && isModelLocked(provider, connection.id, requestedModel)) return false;
   }
-  if (isAccountQuotaExhausted(connection.id)) return false;
+  if (
+    isQuotaExhaustedForRequest(
+      connection.id,
+      provider,
+      requestedModel,
+      connection.providerSpecificData
+    )
+  ) {
+    return false;
+  }
   if (options.bypassQuotaPolicy !== true && params.isQuotaPolicyBlocked(connection)) return false;
   return true;
 }
@@ -551,11 +573,15 @@ function isConnectionEligibleForAffinityPin(
  * the forced id, pin absent from pool, or pin ineligible.
  */
 export function applySessionAffinityPin(params: ApplySessionAffinityPinParams): string | null {
-  const { forcedConnectionId, options, sessionAffinityTtlMs, connections, provider } = params;
+  const { forcedConnectionId, options, sessionAffinityTtlMs, connections, provider, requestedModel } = params;
   const sessionKey = options.sessionKey;
   if (!forcedConnectionId || !sessionKey || sessionAffinityTtlMs <= 0) return null;
 
-  const pinned = getSessionAccountAffinity(sessionKey, provider, sessionAffinityTtlMs);
+  const family =
+    provider === "antigravity" || provider === "agy"
+      ? getAntigravityQuotaFamily(requestedModel)
+      : null;
+  const pinned = getSessionAccountAffinity(sessionKey, provider, sessionAffinityTtlMs, Date.now(), family);
   if (!pinned || pinned.connectionId === forcedConnectionId) return null;
 
   const pinnedConnection = connections.find((conn) => conn.id === pinned.connectionId);

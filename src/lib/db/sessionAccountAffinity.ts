@@ -18,8 +18,9 @@ function normalizePositiveTtl(ttlMs: number | null | undefined): number {
   return Number.isFinite(ttlMs) && Number(ttlMs) > 0 ? Number(ttlMs) : 0;
 }
 
-function affinityKey(sessionKey: string, provider: string): string {
-  const hash = createHash("sha256").update(`${provider}:${sessionKey}`).digest("hex");
+function affinityKey(sessionKey: string, provider: string, family?: string | null): string {
+  const scope = family && family !== "other" ? `${provider}:${family}` : provider;
+  const hash = createHash("sha256").update(`${scope}:${sessionKey}`).digest("hex");
   return `${provider}:${hash}`;
 }
 
@@ -64,11 +65,12 @@ export function getSessionAccountAffinity(
   sessionKey: string,
   provider: string,
   ttlMs = 0,
-  now: number = Date.now()
+  now: number = Date.now(),
+  family?: string | null
 ): SessionAccountAffinityRecord | null {
   if (!sessionKey || !provider || normalizePositiveTtl(ttlMs) <= 0) return null;
 
-  const key = affinityKey(sessionKey, provider);
+  const key = affinityKey(sessionKey, provider, family);
   const row = getDbInstance()
     .prepare("SELECT value FROM key_value WHERE namespace = ? AND key = ?")
     .get(NAMESPACE, key) as { value?: unknown } | undefined;
@@ -88,13 +90,14 @@ export function upsertSessionAccountAffinity(
   provider: string,
   connectionId: string,
   now: number = Date.now(),
-  ttlMs = 0
+  ttlMs = 0,
+  family?: string | null
 ): void {
   const normalizedTtlMs = normalizePositiveTtl(ttlMs);
   if (!sessionKey || !provider || !connectionId || normalizedTtlMs <= 0) return;
 
-  const key = affinityKey(sessionKey, provider);
-  const existing = getSessionAccountAffinity(sessionKey, provider, normalizedTtlMs, now);
+  const key = affinityKey(sessionKey, provider, family);
+  const existing = getSessionAccountAffinity(sessionKey, provider, normalizedTtlMs, now, family);
   const timestamp = isoFromMs(now);
   const record: SessionAccountAffinityRecord = {
     connectionId,
@@ -112,15 +115,16 @@ export function touchSessionAccountAffinity(
   sessionKey: string,
   provider: string,
   now: number = Date.now(),
-  ttlMs = 0
+  ttlMs = 0,
+  family?: string | null
 ): void {
   const normalizedTtlMs = normalizePositiveTtl(ttlMs);
   if (normalizedTtlMs <= 0) return;
 
-  const existing = getSessionAccountAffinity(sessionKey, provider, normalizedTtlMs, now);
+  const existing = getSessionAccountAffinity(sessionKey, provider, normalizedTtlMs, now, family);
   if (!existing) return;
 
-  upsertSessionAccountAffinity(sessionKey, provider, existing.connectionId, now, normalizedTtlMs);
+  upsertSessionAccountAffinity(sessionKey, provider, existing.connectionId, now, normalizedTtlMs, family);
 }
 
 /**
@@ -135,12 +139,13 @@ export function refreshSessionAccountAffinityForConnection(
   provider: string,
   connectionId: string,
   now: number = Date.now(),
-  ttlMs = 0
+  ttlMs = 0,
+  family?: string | null
 ): boolean {
   const normalizedTtlMs = normalizePositiveTtl(ttlMs);
   if (!sessionKey || !provider || !connectionId || normalizedTtlMs <= 0) return false;
 
-  const key = affinityKey(sessionKey, provider);
+  const key = affinityKey(sessionKey, provider, family);
   try {
     const db = getDbInstance();
     const row = db
@@ -165,9 +170,13 @@ export function refreshSessionAccountAffinityForConnection(
   }
 }
 
-export function deleteSessionAccountAffinity(sessionKey: string, provider: string): void {
+export function deleteSessionAccountAffinity(
+  sessionKey: string,
+  provider: string,
+  family?: string | null
+): void {
   if (!sessionKey || !provider) return;
-  deleteAffinityKey(affinityKey(sessionKey, provider));
+  deleteAffinityKey(affinityKey(sessionKey, provider, family));
 }
 
 /**
@@ -188,11 +197,12 @@ export function deleteSessionAccountAffinity(sessionKey: string, provider: strin
 export function evictSessionAccountAffinityForConnection(
   sessionKey: string,
   provider: string,
-  connectionId: string
+  connectionId: string,
+  family?: string | null
 ): boolean {
   if (!sessionKey || !provider || !connectionId) return false;
 
-  const key = affinityKey(sessionKey, provider);
+  const key = affinityKey(sessionKey, provider, family);
   const row = getDbInstance()
     .prepare("SELECT value FROM key_value WHERE namespace = ? AND key = ?")
     .get(NAMESPACE, key) as { value?: unknown } | undefined;

@@ -147,6 +147,7 @@ import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 import { shouldIsolateProbeFailures } from "@/shared/utils/probeOrigin";
 import { getCircuitBreaker, isLocalStreamLifecycleError } from "../../shared/utils/circuitBreaker";
 import { markAccountExhaustedFrom429 } from "../../domain/quotaCache";
+import { getAntigravityQuotaFamily } from "@omniroute/open-sse/services/antigravityQuotaFamily.ts";
 import {
   refreshSuccessfulSessionAffinity,
   resolveForcedConnectionForCredentialPool,
@@ -1882,12 +1883,17 @@ async function handleSingleModelChatImplementation(
         releaseOAuthSession();
         releaseAccountOccupancy();
       };
+      const antigravityFamily =
+        provider === "antigravity" || provider === "agy"
+          ? getAntigravityQuotaFamily(model)
+          : null;
       const refreshSuccessfulSessionPin = () =>
         refreshSuccessfulSessionAffinity({
           provider,
           sessionKey: runtimeOptions.sessionAffinityKey,
           connectionId: credentials.connectionId,
           settings: runtimeOptions.cachedSettings ?? {},
+          family: antigravityFamily,
         });
       // #10348: redact the account prefix by default. Gated on the narrow
       // AUTH_LOG_INCLUDE_ACCOUNT_ID flag (default off) rather than the broad
@@ -2239,7 +2245,8 @@ async function handleSingleModelChatImplementation(
             evictSessionAccountAffinityForConnection(
               runtimeOptions.sessionAffinityKey,
               provider,
-              credentials.connectionId
+              credentials.connectionId,
+              antigravityFamily
             );
           } catch {
             // Best-effort: the current response still surfaces the original 502.
@@ -2276,10 +2283,13 @@ async function handleSingleModelChatImplementation(
             try {
               const affinity = getSessionAccountAffinity(
                 runtimeOptions.sessionAffinityKey,
-                provider
+                provider,
+                0,
+                Date.now(),
+                antigravityFamily
               );
               if (affinity?.connectionId === credentials.connectionId) {
-                deleteSessionAccountAffinity(runtimeOptions.sessionAffinityKey, provider);
+                deleteSessionAccountAffinity(runtimeOptions.sessionAffinityKey, provider, antigravityFamily);
               }
             } catch {
               // best-effort: selection also excludes this connection for the current retry.
@@ -2325,10 +2335,13 @@ async function handleSingleModelChatImplementation(
             try {
               const affinity = getSessionAccountAffinity(
                 runtimeOptions.sessionAffinityKey,
-                provider
+                provider,
+                0,
+                Date.now(),
+                antigravityFamily
               );
               if (affinity?.connectionId === credentials.connectionId) {
-                deleteSessionAccountAffinity(runtimeOptions.sessionAffinityKey, provider);
+                deleteSessionAccountAffinity(runtimeOptions.sessionAffinityKey, provider, antigravityFamily);
               }
             } catch {
               // best-effort: selection also excludes this connection for the current retry.
@@ -2612,7 +2625,8 @@ async function handleSingleModelChatImplementation(
             evictSessionAccountAffinityForConnection(
               runtimeOptions.sessionAffinityKey,
               provider,
-              credentials.connectionId
+              credentials.connectionId,
+              antigravityFamily
             );
           } catch {
             // best-effort: selection also excludes this connection for the current retry.
