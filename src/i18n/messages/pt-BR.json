@@ -1890,7 +1890,14 @@
     "readinessStep3": "Copie seu endpoint",
     "readinessStep4": "Envie uma requisição de teste",
     "readinessContinue": "Continuar configuração",
-    "readinessDismiss": "Dispensar por agora"
+    "readinessDismiss": "Dispensar por agora",
+    "unpricedUsageTitle": "{count, plural, one {# modelo} other {# modelos}} com uso recente mas sem preço configurado",
+    "unpricedUsageFailClosed": "{keys, plural, one {# chave API com limite de uso} other {# chaves API com limite de uso}} usaram esses modelos nos últimos 8 dias. Enquanto esse uso estiver dentro da janela diária ou semanal da chave, a chave é considerada com cota excedida e suas requisições são bloqueadas (UNPRICED_USAGE_BUDGET_POLICY=fail_closed).",
+    "unpricedUsageCountAsZero": "Esse uso conta como $0 para os limites de uso por chave (UNPRICED_USAGE_BUDGET_POLICY=count_as_zero).",
+    "unpricedUsageModelStats": "{requests, plural, one {# requisição} other {# requisições}}, {keys, plural, one {# chave limitada} other {# chaves limitadas}}",
+    "unpricedUsageMore": "…e mais {count}",
+    "unpricedUsageConfigure": "Configurar preços",
+    "unpricedUsageDismiss": "Fechar"
   },
   "analytics": {
     "title": "Análises",
@@ -12878,7 +12885,9 @@
       "disabled": "Desativado",
       "dual": "Dual",
       "alias": "Alias",
-      "canonical": "Canônico"
+      "canonical": "Canônico",
+      "fail_closed": "Bloquear (fail_closed)",
+      "count_as_zero": "Contar como $0 (count_as_zero)"
     },
     "definitions": {
       "REQUIRE_API_KEY": {
@@ -13011,6 +13020,10 @@
       "SERVER_OWNED_TOOL_LOOP_ENABLED": {
         "label": "Server-Owned Tool Loop",
         "description": "Continue chamadas de ferramentas do servidor (server-owned) em não-streaming até que o modelo retorne uma resposta utilizável pelo cliente."
+      },
+      "UNPRICED_USAGE_BUDGET_POLICY": {
+        "label": "Política de Orçamento de Uso Sem Preço",
+        "description": "Como os limites diários/semanais por chave em USD tratam o uso bem-sucedido cujo provedor/modelo não tem uma linha de precificação. fail_closed (padrão) marca a janela como excedida, de modo que um custo desconhecido nunca ultrapasse um limite rígido. count_as_zero conta esse uso como $0 e continua aplicando o gasto precificado. Modelos sem preço são listados na página inicial do painel de qualquer forma."
       }
     }
   },

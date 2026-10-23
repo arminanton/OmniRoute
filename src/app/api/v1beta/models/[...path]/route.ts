@@ -8,6 +8,12 @@ import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import { v1betaGeminiGenerateSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import { convertGeminiToInternal } from "./convertGeminiToInternal";
+import {
+  admitChatRequest,
+  RECORDED_BODY_BYTES_HEADER,
+  releaseChatAdmissionWhenDone,
+  type ChatAdmissionLease,
+} from "@/shared/middleware/chatBodyAdmission";
 
 let initialized = false;
 
@@ -105,25 +111,63 @@ export async function POST(request, { params }) {
 
     // Convert Gemini format to OpenAI/internal format
     const convertedBody = convertGeminiToInternal(body, model, stream);
+    const convertedBodyStr = JSON.stringify(convertedBody);
+    const convertedBytes = Buffer.byteLength(convertedBodyStr, "utf8");
+
+    // After convertGeminiToInternal, drop or reset Content-Length to the converted UTF-8 size
+    const convertedHeaders = new Headers(request.headers);
+    convertedHeaders.delete(RECORDED_BODY_BYTES_HEADER);
+    convertedHeaders.set("content-length", String(convertedBytes));
 
     // Create new request with converted body
-    const newRequest = new Request(request.url, {
+    const convertedRequest = new Request(request.url, {
       method: "POST",
-      headers: request.headers,
-      body: JSON.stringify(convertedBody),
+      headers: convertedHeaders,
+      body: convertedBodyStr,
       signal: request.signal,
-    });
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
 
-    const response = await handleChat(newRequest, () => buildClientRawRequest(request, rawBody));
-
-    if (stream) {
-      // Transform OpenAI SSE => Gemini SSE on the fly. The @google/genai SDK
-      // always uses :streamGenerateContent?alt=sse and expects Gemini SSE
-      // chunks (no [DONE] sentinel — stream just closes).
-      return transformOpenAISSEToGeminiSSE(response, model);
+    // Admit after convert, before handleChat
+    const admission = await admitChatRequest(convertedRequest);
+    if (!admission.admit) {
+      return admission.response;
     }
-    // Convert OpenAI JSON => Gemini GenerateContentResponse JSON.
-    return await convertOpenAIResponseToGemini(response, model);
+
+    let lease: ChatAdmissionLease | null = admission.lease;
+    let response: Response | null = null;
+    try {
+      const chatResponse = await handleChat(admission.request, () => {
+        const clientRawRequest = buildClientRawRequest(request, rawBody);
+        delete clientRawRequest.headers[RECORDED_BODY_BYTES_HEADER];
+        return clientRawRequest;
+      });
+      response = chatResponse;
+
+      if (stream) {
+        // Transform OpenAI SSE => Gemini SSE on the fly. The @google/genai SDK
+        // always uses :streamGenerateContent?alt=sse and expects Gemini SSE
+        // chunks (no [DONE] sentinel -- stream just closes).
+        const transformed = transformOpenAISSEToGeminiSSE(chatResponse, model);
+        const finalResponse = releaseChatAdmissionWhenDone(transformed, lease);
+        lease = null;
+        return finalResponse;
+      }
+      // Convert OpenAI JSON => Gemini GenerateContentResponse JSON.
+      const convertedResponse = await convertOpenAIResponseToGemini(chatResponse, model);
+      const finalResponse = releaseChatAdmissionWhenDone(convertedResponse, lease);
+      lease = null;
+      return finalResponse;
+    } catch (error) {
+      try {
+        await response?.body?.cancel(error);
+      } catch {
+        // The response may already be locked by a transformer; its cancel path owns release.
+      }
+      throw error;
+    } finally {
+      lease?.release();
+    }
   } catch (error) {
     console.log("Error handling Gemini request:", error);
     return Response.json(

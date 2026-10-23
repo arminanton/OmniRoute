@@ -18,6 +18,18 @@ export const KNOWN_OFFENDING_FIELDS: readonly string[] = [
   "verbosity",
 ];
 
+export const REASONING_REQUEST_FIELDS = [
+  "reasoning_effort",
+  "reasoning",
+  "thinking",
+  "think",
+] as const;
+
+/** True only when the upstream explicitly says it does not support reasoning. */
+export function isUnsupportedThinkingError(bodyText: string): boolean {
+  return /\bdoes not support\s+(?:thinking|reasoning)\b/i.test(bodyText);
+}
+
 /** Return the first known-offending field literally named in a 400 body, or null. */
 export function findOffendingField(bodyText: string): string | null {
   if (typeof bodyText !== "string" || !bodyText) return null;
@@ -48,9 +60,20 @@ export function detectUnsupportedParam(bodyText: string): string | null {
 }
 
 /** Immutably drop request fields Groq rejects with a 400. */
-export function stripGroqUnsupportedFields<T extends Record<string, unknown>>(body: T): T {
+export function stripGroqUnsupportedFields<T extends Record<string, unknown>>(
+  body: T,
+  model?: string,
+  forcedEffort?: string
+): T {
   if (!body || typeof body !== "object") return body;
   const next: Record<string, unknown> = { ...body };
+  if (model === "openai/gpt-oss-20b") {
+    if (forcedEffort === "none" || forcedEffort === "low") {
+      next.reasoning_effort = "low";
+    }
+    delete next.reasoning;
+    delete next.output_config;
+  }
   delete next.logprobs;
   delete next.logit_bias;
   delete next.top_logprobs;

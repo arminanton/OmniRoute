@@ -936,7 +936,11 @@ export async function handleAudioTranscription({
       headers: { "Content-Type": respContentType },
     });
   } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err));
-    return errorResponse(500, `Transcription request failed: ${error.message}`);
+    const error = err as { message?: unknown };
+    return sanitizedUpstreamErrorResponse(
+      502,
+      error?.message,
+      "Transcription request failed"
+    );
   }
 }

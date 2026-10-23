@@ -1,0 +1,1 @@
+- **fix(dashboard):** show a closeable warning when model import falls back to the local catalog instead of reporting all-known models as success (#15069).

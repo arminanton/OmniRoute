@@ -37,6 +37,22 @@ function makeRequest(agentId: string, body: unknown = { sudoPassword: "test-sudo
   });
 }
 
+async function withHostsFileContents<T>(contents: string, run: () => Promise<T>): Promise<T> {
+  const mutableFs = fs as unknown as { readFileSync: (...args: unknown[]) => unknown };
+  const originalReadFileSync = mutableFs.readFileSync;
+  mutableFs.readFileSync = (...args: unknown[]) => {
+    const filePath = String(args[0]).replace(/\\/g, "/").toLowerCase();
+    if (filePath.endsWith("/hosts") || filePath === "hosts") return contents;
+    return originalReadFileSync(...args);
+  };
+
+  try {
+    return await run();
+  } finally {
+    mutableFs.readFileSync = originalReadFileSync;
+  }
+}
+
 test("unknown agent returns 404 without a stack trace", async () => {
   const res = await resetRoute.POST(makeRequest("__unknown_agent__"), {
     params: Promise.resolve({ id: "__unknown_agent__" }),
@@ -109,6 +125,40 @@ test("resets mappings when DNS and setup flags are absent", async () => {
   assert.deepEqual(mappingsDb.getMappingsForAgent("cursor"), []);
   assert.equal(stateDb.getAgentBridgeState("cursor")?.dns_enabled, false);
   assert.equal(stateDb.getAgentBridgeState("cursor")?.setup_completed, false);
+});
+
+test("does not verify reset when a partial IPv4 or IPv6 DNS entry remains", async () => {
+  for (const hostEntry of ["127.0.0.1 api2.cursor.sh", "::1 api2.cursor.sh"]) {
+    const res = await withHostsFileContents(`${hostEntry}\n`, () =>
+      resetRoute.POST(makeRequest("cursor"), { params: Promise.resolve({ id: "cursor" }) })
+    );
+    assert.equal(res.status, 500);
+    const body = (await res.json()) as {
+      error?: { details?: { verified?: boolean; dnsEntriesRemain?: boolean | null } };
+    };
+    assert.equal(body.error?.details?.verified, false);
+    assert.equal(body.error?.details?.dnsEntriesRemain, true);
+  }
+});
+
+test("preserves a shared DNS host required by an active sibling agent", async () => {
+  stateDb.upsertAgentBridgeState({ agent_id: "kiro", dns_enabled: true, setup_completed: true });
+
+  const res = await withHostsFileContents("::1 api.anthropic.com\n", () =>
+    resetRoute.POST(makeRequest("claude-code"), {
+      params: Promise.resolve({ id: "claude-code" }),
+    })
+  );
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    verified: boolean;
+    dnsHostsPreservedForOtherAgents: string[];
+    otherAgentsStillActive: boolean;
+  };
+  assert.equal(body.verified, true);
+  assert.deepEqual(body.dnsHostsPreservedForOtherAgents, ["api.anthropic.com"]);
+  assert.equal(body.otherAgentsStillActive, true);
+  assert.equal(stateDb.getAgentBridgeState("kiro")?.dns_enabled, true);
 });
 
 test("does not return success when reset fails", async () => {

@@ -1,0 +1,1 @@
+Provider creation now forwards `--allow-no-credential` and accepts it only for catalogued optional-credential providers. Cookie-backed connections now reject a reused name with a different credential instead of overwriting the existing connection; the UI shows a safe conflict message.

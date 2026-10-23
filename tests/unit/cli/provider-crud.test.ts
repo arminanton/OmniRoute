@@ -32,6 +32,15 @@ test("provider payload separates management auth from provider credential", () =
   });
 });
 
+test("provider payload forwards allow-no-credential only when enabled", () => {
+  const allowed = buildProviderPayload("ollama-local", { name: "local", allowNoCredential: true });
+  assert.equal(allowed.allowNoCredential, true);
+  assert.equal(
+    "allowNoCredential" in buildProviderPayload("ollama-local", { name: "local" }),
+    false
+  );
+});
+
 test("provider selector resolves id, prefix, name, and provider", () => {
   const body = {
     connections: [

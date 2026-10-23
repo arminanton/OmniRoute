@@ -146,7 +146,7 @@ export function createSseHeartbeatTransform({
   chunkId,
   chunkModel,
   responsesId,
-}: SseHeartbeatTransformOptions = {}): TransformStream<Uint8Array, Uint8Array> {
+}: SseHeartbeatTransformOptions = {}): ReadableWritablePair<Uint8Array, Uint8Array> {
   if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
     return new TransformStream<Uint8Array, Uint8Array>();
   }
@@ -171,7 +171,7 @@ export function createSseHeartbeatTransform({
     intervalId = undefined;
   };
 
-  return new TransformStream<Uint8Array, Uint8Array>({
+  const transform = new TransformStream<Uint8Array, Uint8Array>({
     start(controller) {
       intervalId = globalThis.setInterval(() => {
         if (signal?.aborted) {
@@ -204,9 +204,35 @@ export function createSseHeartbeatTransform({
     flush() {
       stop();
     },
-
-    cancel() {
-      stop();
-    },
   });
+  const reader = transform.readable.getReader();
+  void reader.closed.then(stop, stop);
+  let canceled = false;
+
+  return {
+    readable: new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const { value, done } = await reader.read();
+          if (canceled) return;
+          if (done) {
+            stop();
+            controller.close();
+          } else {
+            controller.enqueue(value);
+          }
+        } catch (error) {
+          stop();
+          if (!canceled) controller.error(error);
+        }
+      },
+
+      async cancel(reason) {
+        canceled = true;
+        stop();
+        await reader.cancel(reason);
+      },
+    }),
+    writable: transform.writable,
+  };
 }

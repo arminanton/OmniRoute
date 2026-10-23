@@ -20,6 +20,34 @@ test("createProviderSchema rejects Pollinations without apiKey", () => {
   assert.equal(result.success, false);
 });
 
+test("createProviderSchema honors allowNoCredential only for optional providers", () => {
+  assert.equal(
+    createProviderSchema.safeParse({
+      provider: "ollama-local",
+      name: "Local",
+      allowNoCredential: true,
+    }).success,
+    true
+  );
+  assert.equal(
+    createProviderSchema.safeParse({
+      provider: "pollinations",
+      name: "Pollinations",
+      allowNoCredential: true,
+    }).success,
+    false
+  );
+  assert.equal(
+    createProviderSchema.safeParse({
+      provider: "pollinations",
+      name: "Pollinations",
+      apiKey: "present",
+      allowNoCredential: true,
+    }).success,
+    false
+  );
+});
+
 test("providersBatchTestSchema accepts cloud-agent batch mode", () => {
   const result = providersBatchTestSchema.safeParse({
     mode: "cloud-agent",

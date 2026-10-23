@@ -1889,7 +1889,14 @@
     "readinessStep3": "Copy your endpoint",
     "readinessStep4": "Send a test request",
     "readinessContinue": "Continue setup",
-    "readinessDismiss": "Dismiss for now"
+    "readinessDismiss": "Dismiss for now",
+    "unpricedUsageTitle": "{count, plural, one {# modèle} other {# modèles}} avec une utilisation récente mais sans prix configuré",
+    "unpricedUsageFailClosed": "{keys, plural, one {# clé API avec une limite d’utilisation} other {# clés API avec une limite d’utilisation}} ont utilisé ces modèles au cours des 8 derniers jours. Tant que cette utilisation se situe dans la fenêtre quotidienne ou hebdomadaire de la clé, la clé est considérée comme hors quota et ses requêtes sont bloquées (UNPRICED_USAGE_BUDGET_POLICY=fail_closed).",
+    "unpricedUsageCountAsZero": "Cette utilisation compte pour $0 dans les limites d’utilisation par clé (UNPRICED_USAGE_BUDGET_POLICY=count_as_zero).",
+    "unpricedUsageModelStats": "{requests, plural, one {# requête} other {# requêtes}}, {keys, plural, one {# clé limitée} other {# clés limitées}}",
+    "unpricedUsageMore": "…et {count} de plus",
+    "unpricedUsageConfigure": "Configurer la tarification",
+    "unpricedUsageDismiss": "Fermer"
   },
   "analytics": {
     "title": "Analyse",
@@ -12867,7 +12874,9 @@
       "disabled": "Désactivé",
       "dual": "Double",
       "alias": "Alias",
-      "canonical": "Canonique"
+      "canonical": "Canonique",
+      "fail_closed": "Bloquer (fail_closed)",
+      "count_as_zero": "Compter comme $0 (count_as_zero)"
     },
     "definitions": {
       "REQUIRE_API_KEY": {
@@ -12996,6 +13005,10 @@
       },
       "SKILLS_SANDBOX_NETWORK_ENABLED": {
         "description": "Activer l'accès réseau dans le bac à sable des compétences."
+      },
+      "UNPRICED_USAGE_BUDGET_POLICY": {
+        "label": "Politique de budget pour utilisation non tarifée",
+        "description": "Comment les limites USD journalières/hebdomadaires par clé traitent l’utilisation réussie dont le fournisseur/le modèle n’a pas de ligne de tarification. fail_closed (par défaut) marque la fenêtre comme dépassée, empêchant ainsi qu’un coût inconnu dépasse un plafond strict. count_as_zero compte cette utilisation comme $0 et continue d’appliquer les dépenses tarifées. Les modèles sans prix sont listés sur la page d’accueil du tableau de bord dans les deux cas."
       }
     }
   },

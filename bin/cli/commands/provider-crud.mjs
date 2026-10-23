@@ -79,6 +79,9 @@ export function buildProviderPayload(provider, opts = {}, credential) {
   };
   if (!body.name) throw new Error("Provider name is required.");
   if (!isBlank(credential)) body.apiKey = String(credential);
+  if (opts.allowNoCredential || opts.noCredential || opts.credential === false) {
+    body.allowNoCredential = true;
+  }
   if (!isBlank(opts.defaultModel)) body.defaultModel = String(opts.defaultModel).trim();
   if (!isBlank(opts.priority)) {
     const priority = Number(opts.priority);

@@ -2303,40 +2303,88 @@ export function buildCanonicalToAliasMap(
 }
 
 /**
- * Enrichment lookup with alias-fallback chain.
- *
- * Resolution order (first hit wins):
- *
- *   1. `enrichment.get(rawId)` — direct hit on `<prefix>/<modelId>` or
- *      bare id (the fetcher writes under both forms).
- *   2. If `rawId` is `<canonical>/<modelId>` and `canonicalToAlias` has
- *      a mapping for `canonical`, try `<alias>/<modelId>`. This rescues
- *      duplicate rows like `claude/claude-opus-4-7` (canonical) when
- *      enrichment only indexed under `cc/claude-opus-4-7` (alias).
- *   3. Bare `<modelId>` as a last resort. Already covered by step 1 in
- *      practice (fetcher writes bare keys), but kept defensive.
+ * Resolve provider-qualified enrichment first. Bare provider metadata needs a
+ * matching owner; ownerless fallback keeps only its name. Metadata-free bare
+ * entries retain legacy pricing behavior.
  *
  * Returns `undefined` when no lookup hits.
  */
 export function lookupEnrichment(
   rawId: string,
   enrichment: OmniRouteEnrichmentMap | undefined,
-  canonicalToAlias: Map<string, string>
+  canonicalToAlias: Map<string, string>,
+  providerOwner?: string
 ): OmniRouteEnrichmentEntry | undefined {
   if (!enrichment) return undefined;
-  const direct = enrichment.get(rawId);
-  if (direct) return direct;
   const slash = rawId.indexOf("/");
+  const prefix = slash > 0 ? rawId.slice(0, slash) : undefined;
+  const modelId = slash > 0 ? rawId.slice(slash + 1) : rawId;
+  const providerIds = new Set<string>();
+  if (prefix) providerIds.add(prefix);
+  if (providerOwner?.trim()) providerIds.add(providerOwner.trim());
+
+  const belongsToRow = (entry: OmniRouteEnrichmentEntry): boolean => {
+    const providers = [entry.providerAlias, entry.providerCanonical]
+      .filter((provider): provider is string => typeof provider === "string")
+      .map((provider) => provider.trim())
+      .filter(Boolean);
+    const owner = providerOwner?.trim();
+    if (owner) {
+      if (providers.length === 0) {
+        return (
+          prefix === owner ||
+          (prefix !== undefined && canonicalToAlias.get(owner) === prefix) ||
+          (prefix !== undefined && canonicalToAlias.get(prefix) === owner)
+        );
+      }
+      return providers.some(
+        (provider) =>
+          provider === owner ||
+          canonicalToAlias.get(owner) === provider ||
+          canonicalToAlias.get(provider) === owner
+      );
+    }
+    return providers.some((provider) => providerIds.has(provider));
+  };
+
+  const direct = enrichment.get(rawId);
+  if (slash > 0 && direct) {
+    return !providerOwner?.trim() || belongsToRow(direct) ? direct : undefined;
+  }
+  if (slash < 0 && providerIds.size === 0 && direct) return direct;
+
   if (slash > 0) {
-    const prefix = rawId.slice(0, slash);
-    const modelId = rawId.slice(slash + 1);
-    const alias = canonicalToAlias.get(prefix);
+    const alias = canonicalToAlias.get(prefix!);
     if (alias && alias !== prefix) {
       const viaAlias = enrichment.get(`${alias}/${modelId}`);
-      if (viaAlias) return viaAlias;
+      if (viaAlias) {
+        return !providerOwner?.trim() || belongsToRow(viaAlias) ? viaAlias : undefined;
+      }
     }
-    const bare = enrichment.get(modelId);
-    if (bare) return bare;
+  } else {
+    for (const provider of providerIds) {
+      const alias = canonicalToAlias.get(provider);
+      const qualified = enrichment.get(`${provider}/${modelId}`) ??
+        (alias ? enrichment.get(`${alias}/${modelId}`) : undefined);
+      if (qualified) return qualified;
+    }
+  }
+
+  const bare = enrichment.get(modelId);
+  if (bare) {
+    const hasProviderMetadata = Boolean(
+      bare.providerAlias?.trim() ||
+        bare.providerCanonical?.trim() ||
+        bare.providerDisplayName?.trim() ||
+        bare.freeType ||
+        bare.monthlyTokens !== undefined ||
+        bare.creditTokens !== undefined,
+    );
+    if (!hasProviderMetadata) return bare;
+    if (providerOwner?.trim()) {
+      return belongsToRow(bare) ? bare : undefined;
+    }
+    if (bare.name) return { name: bare.name };
   }
   return undefined;
 }
@@ -3426,7 +3474,7 @@ export function createOmniRouteProviderHook(
           baseURL,
           apiFormat: resolved.features?.apiFormat,
         });
-        const enrichEntry = lookupEnrichment(entry.id, rawEnrichment, canonicalToAlias);
+        const enrichEntry = lookupEnrichment(entry.id, rawEnrichment, canonicalToAlias, entry.owned_by);
         applyEnrichment(model, enrichEntry);
         // Prepend upstream provider label (e.g. `Claude - Claude Opus 4.7`)
         // so the picker groups same-model rows by upstream connection.
@@ -4367,7 +4415,7 @@ export function buildStaticProviderEntry(
     // to the raw id when no enrichment entry is found. The alias-fallback
     // lookup rescues `<canonical>/<id>` rows whose enrichment indexed only
     // under `<alias>/<id>`.
-    const enrichmentEntry = lookupEnrichment(raw.id, enrichment, canonicalToAlias);
+    const enrichmentEntry = lookupEnrichment(raw.id, enrichment, canonicalToAlias, raw.owned_by);
     const enrichmentName = enrichmentEntry?.name;
     let displayName = enrichmentName && enrichmentName.length > 0 ? enrichmentName : raw.id;
     // Provider-tag PREFIX — `<label> - <name>` so the picker groups by

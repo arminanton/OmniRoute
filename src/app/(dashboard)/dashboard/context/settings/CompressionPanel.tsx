@@ -203,6 +203,7 @@ function AdaptiveContextBudgetDial({
 
 export default function CompressionPanel() {
   const t = useTranslations("settings");
+  const common = useTranslations("common");
   // D-A6/§7: locale-gated styles (e.g. terse-cjk → zh) are only OFFERED under their locale.
   // Compare the UI language base ("zh-CN" → "zh") against the style's `locale`.
   const uiLang = (useLocale() || "en").split("-")[0];
@@ -212,6 +213,8 @@ export default function CompressionPanel() {
   // default so the grid stays scannable.
   const [expandedGuidance, setExpandedGuidance] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<"" | "saved" | "error">("");
   const configRef = useRef(config);
@@ -223,32 +226,46 @@ export default function CompressionPanel() {
   const lastAckedGenRef = useRef(0);
 
   useEffect(() => {
+    let cancelled = false;
     fetch("/api/settings/compression")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: Partial<CompressionConfig> | null) => {
-        if (data) {
-          const hydrated: CompressionConfig = {
-            ...DEFAULT_CONFIG,
-            ...data,
-            engines: normalizeEngines(data.engines),
-            cavemanOutputMode: data.cavemanOutputMode ?? DEFAULT_CONFIG.cavemanOutputMode,
-            outputStyles: data.outputStyles ?? DEFAULT_CONFIG.outputStyles,
-            contextBudget: { ...DEFAULT_CONTEXT_BUDGET, ...(data.contextBudget ?? {}) },
-          };
-          lastConfirmedRef.current = hydrated;
-          setConfig(hydrated);
-        }
+      .then((r) => {
+        if (!r.ok) throw new Error("Compression settings load failed");
+        return r.json() as Promise<Partial<CompressionConfig>>;
       })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+      .then((data) => {
+        if (!data || typeof data !== "object" || Array.isArray(data)) {
+          throw new Error("Compression settings response was invalid");
+        }
+        if (cancelled) return;
+        const hydrated: CompressionConfig = {
+          ...DEFAULT_CONFIG,
+          ...data,
+          engines: normalizeEngines(data.engines),
+          cavemanOutputMode: data.cavemanOutputMode ?? DEFAULT_CONFIG.cavemanOutputMode,
+          outputStyles: data.outputStyles ?? DEFAULT_CONFIG.outputStyles,
+          contextBudget: { ...DEFAULT_CONTEXT_BUDGET, ...(data.contextBudget ?? {}) },
+        };
+        lastConfirmedRef.current = hydrated;
+        setConfig(hydrated);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
 
     fetch("/api/settings/compression/mcp-accessibility")
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { enabled?: boolean } | null) => {
-        if (data && typeof data.enabled === "boolean") setMcpAccessibility(data.enabled);
+        if (!cancelled && data && typeof data.enabled === "boolean") setMcpAccessibility(data.enabled);
       })
       .catch(() => {});
-  }, []);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadAttempt]);
 
   // Persist a merge-patch. The DB persists `engines` as one whole row, so callers that
   // touch an engine pass the full engines map to avoid dropping the other engines.
@@ -369,6 +386,29 @@ export default function CompressionPanel() {
     return (
       <Card className="p-6">
         <p className="text-sm text-text-muted">{t("loading")}</p>
+      </Card>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <Card className="p-6">
+        <div className="flex items-center justify-between gap-4">
+          <p role="alert" className="text-sm text-text-muted">
+            {t("compressionTitle")}: {common("failedToLoad")}
+          </p>
+          <button
+            type="button"
+            className="rounded-md border border-border px-3 py-2 text-sm hover:bg-surface-hover"
+            onClick={() => {
+              setLoading(true);
+              setLoadError(false);
+              setLoadAttempt((attempt) => attempt + 1);
+            }}
+          >
+            {t("retry")}
+          </button>
+        </div>
       </Card>
     );
   }

@@ -446,7 +446,8 @@ interface UsageSpendResult {
 
 async function getApiKeyUsdSpendSince(
   apiKeyId: string,
-  sinceIso: string
+  sinceIso: string,
+  nowIso: string
 ): Promise<UsageSpendResult> {
   if (!apiKeyId) return { spentUsd: 0, unpricedModels: [], pricingFailure: false };
   const db = getDbInstance();
@@ -465,11 +466,12 @@ async function getApiKeyUsdSpendSince(
       FROM usage_history
       WHERE api_key_id = @apiKeyId
         AND timestamp >= @sinceIso
+        AND timestamp <= @nowIso
         AND success = 1
       GROUP BY LOWER(provider), LOWER(model), serviceTier
     `
     )
-    .all({ apiKeyId, sinceIso }) as UsageCostRow[];
+    .all({ apiKeyId, sinceIso, nowIso }) as UsageCostRow[];
 
   let total = 0;
   let pricingFailure = false;
@@ -513,6 +515,7 @@ export async function getApiKeyUsageLimitStatus(
 ): Promise<ApiKeyUsageLimitStatus> {
   const resolvedDeps = await resolveDeps(deps);
   const now = resolvedDeps.now();
+  const nowIso = new Date(now).toISOString();
   const dailyWindowStartIso = getFortalezaDayStartIso(now);
   const dailyResetAtIso = getFortalezaDayResetIso(now);
   const weeklySetting = getApiKeyWeeklyWindowSetting();
@@ -537,8 +540,8 @@ export async function getApiKeyUsageLimitStatus(
   const enabled = metadata.usageLimitEnabled === true;
 
   const [dailyUsage, weeklyUsage] = await Promise.all([
-    getApiKeyUsdSpendSince(metadata.id, dailyWindowStartIso),
-    getApiKeyUsdSpendSince(metadata.id, weeklyWindowStartIso),
+    getApiKeyUsdSpendSince(metadata.id, dailyWindowStartIso, nowIso),
+    getApiKeyUsdSpendSince(metadata.id, weeklyWindowStartIso, nowIso),
   ]);
 
   return {

@@ -8,6 +8,10 @@ import {
   withCompressionHeaderEcho,
 } from "@/shared/utils/compressionHeaderEcho";
 import { withChatAdmission } from "@/shared/middleware/withChatAdmission";
+import {
+  getSanitizedRequestHeaders,
+  transferRecordedBodyBytes,
+} from "@/shared/middleware/recordedBodyBytes";
 
 let initPromise = null;
 // `logger: null` — the guardrail registry re-evaluates this request inside
@@ -53,7 +57,7 @@ async function postHandler(request: Request) {
 
   // Prompt injection guard
   try {
-    const cloned = request.clone();
+    const cloned = transferRecordedBodyBytes(request, request.clone());
     const body = await cloned.json().catch(() => null);
     if (body) {
       const { blocked, result } = injectionGuard(body);
@@ -81,12 +85,15 @@ async function postHandler(request: Request) {
         };
         delete normalized.prompt;
 
-        const newRequest = new Request(request.url, {
-          method: request.method,
-          headers: request.headers,
-          body: JSON.stringify(normalized),
-          signal: request.signal,
-        });
+        const newRequest = transferRecordedBodyBytes(
+          request,
+          new Request(request.url, {
+            method: request.method,
+            headers: getSanitizedRequestHeaders(request),
+            body: JSON.stringify(normalized),
+            signal: request.signal,
+          })
+        );
         // #3571 — translate the chat-pipeline response back to the legacy
         // text-completion shape so OpenAI Completion clients (e.g. TabbyML) work.
         // Thread `body.model` so response `body.model` echoes the caller's
@@ -110,8 +117,7 @@ async function postHandler(request: Request) {
   // Re-read body.model so the response echoes the caller's requested identifier.
   let requestedModel: string | undefined;
   try {
-    const bodyForModel = await request
-      .clone()
+    const bodyForModel = await transferRecordedBodyBytes(request, request.clone())
       .json()
       .catch(() => null);
     if (bodyForModel && typeof bodyForModel.model === "string") {

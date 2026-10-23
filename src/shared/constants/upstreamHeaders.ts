@@ -22,6 +22,7 @@ const FORBIDDEN = new Set(
     "proxy-authorization",
     "x-omniroute-self-hop",
     "x-omniroute-admission-bypass",
+    "x-omniroute-recorded-body-bytes",
     "transfer-encoding",
     "te",
     "trailer",

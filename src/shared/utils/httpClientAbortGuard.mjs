@@ -1,5 +1,7 @@
 "use strict";
 
+import { isProxyFetchExhaustedTransportError } from "./proxyFetchProvenance.mjs";
+
 /**
  * HTTP client-abort crash guard (#fix-dev-server-aborted).
  *
@@ -32,24 +34,56 @@
  * @module
  */
 
+/** @param {unknown} value @returns {value is Error} */
+function isError(value) {
+  try {
+    return value instanceof Error;
+  } catch {
+    return false;
+  }
+}
+
+/** @param {Error} error @param {string[]} names @returns {Record<string, unknown> | undefined} */
+function readErrorProperties(error, names) {
+  try {
+    /** @type {Record<string, unknown>} */
+    const properties = {};
+    for (const name of names) properties[name] = Reflect.get(error, name);
+    return properties;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * @param {unknown} err
  * @returns {boolean} true when `err` represents a client closing the
  *   connection rather than a server-side fault.
  */
 export function isClientAbortError(err) {
-  if (!err || typeof err !== "object") return false;
-  const e = /** @type {NodeJS.ErrnoException} */ (err);
+  if (!isError(err)) return false;
+  const e = readErrorProperties(err, ["message", "name", "code"]);
+  if (!e) return false;
+  const { message, name, code } = e;
   // Node emits `Error: aborted` (no code) from http.Server#abortIncoming.
-  if (e.message === "aborted" || e.message === "Aborted") return true;
+  if (
+    typeof message === "string" &&
+    (message === "aborted" || message === "Aborted")
+  ) return true;
   // OmniRoute's SSE teardown aborts in-flight legs with
   // `Error [AbortError]: request_signal_aborted` on client disconnects
   // (open-sse/utils/streamHandler.ts), and fetch/DOM cancellation surfaces as
   // `AbortError` with an abort-flavoured message. Same benign class as
   // `Error: aborted` — an emitter-left 'error' event on any of these used to
   // kill the process (#fix-dev-server-aborted).
-  if (e.name === "AbortError" && /abort/i.test(String(e.message))) return true;
-  switch (e.code) {
+  if (
+    typeof name === "string" &&
+    name === "AbortError" &&
+    typeof message === "string" &&
+    /abort/i.test(message)
+  ) return true;
+  if (typeof code !== "string") return false;
+  switch (code) {
     case "ERR_STREAM_PREMATURE_CLOSE":
     case "ECONNRESET":
     case "EPIPE":
@@ -73,9 +107,11 @@ export function isClientAbortError(err) {
  */
 export function isRecoverableUpstreamTimeoutError(err) {
   if (err === "RELAY_TIMEOUT" || err === "relay_timeout") return true;
-  if (!err || typeof err !== "object") return false;
-  const e = /** @type {NodeJS.ErrnoException & { errorCode?: string }} */ (err);
-  return e.code === "RELAY_TIMEOUT" || e.errorCode === "relay_timeout";
+  if (!isError(err)) return false;
+  const e = readErrorProperties(err, ["code", "errorCode"]);
+  return !!e &&
+    ((typeof e.code === "string" && e.code === "RELAY_TIMEOUT") ||
+      (typeof e.errorCode === "string" && e.errorCode === "relay_timeout"));
 }
 
 const PROXY_NETWORK_ERROR_CODES = new Set([
@@ -92,32 +128,26 @@ const PROXY_NETWORK_ERROR_CODES = new Set([
   "ERR_HTTP2_STREAM_ERROR",
 ]);
 
-const exhaustedProxyTransportErrors = new WeakSet();
-
-/** Called only by proxyFetch after an exhausted transport failure. */
-export function markProxyFetchExhaustedTransportError(err) {
-  if (err && typeof err === "object") exhaustedProxyTransportErrors.add(err);
-  return err;
-}
-
-export function isProxyFetchExhaustedTransportError(err) {
-  return err !== null && typeof err === "object" && exhaustedProxyTransportErrors.has(err);
-}
-
-/** Require private proxyFetch provenance and the explicit transport cause. */
+/** Require private proxyFetch provenance and the explicit transport cause.
+ * @param {unknown} err
+ */
 function isRecoverableProxyNetworkError(err) {
-  if (!isProxyFetchExhaustedTransportError(err)) return false;
-  const e =
-    /** @type {{ code?: string; errorCode?: string; causeCode?: string; cause?: unknown }} */ (err);
+  if (!isProxyFetchExhaustedTransportError(err) || !isError(err)) return false;
+  const e = readErrorProperties(err, ["code", "errorCode", "causeCode", "cause"]);
+  if (!e) return false;
   const markedProxyFailure =
-    e.code === "PROXY_REQUEST_FAILED" ||
-    (e.code === "PROXY_UNREACHABLE" && e.errorCode === "proxy_unreachable");
+    (typeof e.code === "string" && e.code === "PROXY_REQUEST_FAILED") ||
+    (typeof e.code === "string" && e.code === "PROXY_UNREACHABLE" &&
+      typeof e.errorCode === "string" && e.errorCode === "proxy_unreachable");
   if (!markedProxyFailure) return false;
-  const causeCode =
-    e.causeCode ??
-    (e.cause && typeof e.cause === "object"
-      ? /** @type {{ code?: string }} */ (e.cause).code
-      : undefined);
+  let causeCode = e.causeCode;
+  if (causeCode === null || causeCode === undefined) {
+    const causeError = e.cause;
+    if (!isError(causeError)) return false;
+    const cause = readErrorProperties(causeError, ["code"]);
+    if (!cause) return false;
+    causeCode = cause.code;
+  }
   return typeof causeCode === "string" && PROXY_NETWORK_ERROR_CODES.has(causeCode);
 }
 
@@ -193,10 +223,17 @@ export function installProcessCrashGuard(log) {
   // `logger("warn", ...)` throws TypeError and kills the process on the very
   // abort the guard exists to swallow. Default to console.warn as a function.
   const logger = typeof log === "function" ? log : console.warn.bind(console);
+  /** @param {unknown} value */
+  const errorMessage = (value) => {
+    if (typeof value === "string") return value;
+    if (!isError(value)) return value;
+    const properties = readErrorProperties(value, ["message"]);
+    return properties && typeof properties.message === "string" ? properties.message : value;
+  };
 
   process.on("uncaughtException", (err, origin) => {
     if (shouldSwallowUncaught(err, origin)) {
-      logger("warn", "[server] swallowed client-abort uncaughtException:", err?.message ?? err);
+      logger("warn", "[server] swallowed client-abort uncaughtException:", errorMessage(err));
       return;
     }
     throw err;
@@ -207,7 +244,7 @@ export function installProcessCrashGuard(log) {
       logger(
         "warn",
         "[server] swallowed client-abort unhandledRejection:",
-        reason?.message ?? reason
+        errorMessage(reason)
       );
       return;
     }

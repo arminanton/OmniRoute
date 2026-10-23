@@ -105,6 +105,32 @@ test("createSseHeartbeatTransform clears the interval when aborted", async () =>
   );
 });
 
+test("createSseHeartbeatTransform clears the interval and propagates downstream cancellation", async () => {
+  await withSseCommentsOn(() =>
+    withFakeIntervals(async (intervals) => {
+      let resolveSourceCancel: (reason: unknown) => void = () => {};
+      const sourceCanceled = new Promise<unknown>((resolve) => {
+        resolveSourceCancel = resolve;
+      });
+      const source = new ReadableStream<Uint8Array>({
+        cancel(reason) {
+          resolveSourceCancel(reason);
+        },
+      });
+      const output = source.pipeThrough(createSseHeartbeatTransform({ intervalMs: 250 }));
+      const reader = output.getReader();
+
+      assert.equal(intervals.length, 1);
+      assert.equal(intervals[0].cleared, false);
+
+      await reader.cancel("client disconnected");
+
+      assert.equal(intervals[0].cleared, true);
+      assert.equal(await sourceCanceled, "client disconnected");
+    })
+  );
+});
+
 const { shapeForClientFormat } = await import("../../open-sse/utils/sseHeartbeat.ts");
 
 test("shape: anthropic-ping emits event: ping with empty JSON data", async () => {

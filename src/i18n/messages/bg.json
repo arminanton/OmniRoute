@@ -1889,7 +1889,14 @@
     "readinessStep3": "Copy your endpoint",
     "readinessStep4": "Send a test request",
     "readinessContinue": "Continue setup",
-    "readinessDismiss": "Dismiss for now"
+    "readinessDismiss": "Dismiss for now",
+    "unpricedUsageTitle": "{count, plural, one {# модел} other {# модела}} с скорошна употреба, но без конфигурирана цена",
+    "unpricedUsageFailClosed": "{keys, plural, one {# API ключ с лимит на използване} other {# API ключа с лимит на използване}} използваха тези модели през последните 8 дни. Докато тази употреба е в рамките на дневния или седмичния прозорец на ключа, ключът се смята за надвишил квотата и заявките му се блокират (UNPRICED_USAGE_BUDGET_POLICY=fail_closed).",
+    "unpricedUsageCountAsZero": "Тази употреба се зачита като $0 към лимитите за използване на ключа (UNPRICED_USAGE_BUDGET_POLICY=count_as_zero).",
+    "unpricedUsageModelStats": "{requests, plural, one {# заявка} other {# заявки}}, {keys, plural, one {# ограничен ключ} other {# ограничени ключа}}",
+    "unpricedUsageMore": "…и още {count}",
+    "unpricedUsageConfigure": "Настрой ценообразуването",
+    "unpricedUsageDismiss": "Отхвърли"
   },
   "analytics": {
     "title": "Анализ",
@@ -12867,7 +12874,9 @@
       "disabled": "Деактивирано",
       "dual": "Двоен",
       "alias": "Псевдоним",
-      "canonical": "Каноничен"
+      "canonical": "Каноничен",
+      "fail_closed": "Блокирай (fail_closed)",
+      "count_as_zero": "Считай като $0 (count_as_zero)"
     },
     "definitions": {
       "REQUIRE_API_KEY": {
@@ -12996,6 +13005,10 @@
       },
       "SKILLS_SANDBOX_NETWORK_ENABLED": {
         "description": "Активиране на мрежов достъп в пясъчника за умения."
+      },
+      "UNPRICED_USAGE_BUDGET_POLICY": {
+        "label": "Политика за бюджет при употреба без цена",
+        "description": "Как дневните/седмични USD лимити за ключ третират успешната употреба, чийто доставчик/модел няма запис с цена. fail_closed (по подразбиране) маркира прозореца като превишен, така че неизвестна цена никога не може да заобиколи твърдия лимит. count_as_zero отчита тази употреба като $0 и продължава да прилага ограниченията за разходи с конфигурирана цена. Моделите без цена се показват на началната страница на таблото във всеки случай."
       }
     }
   },

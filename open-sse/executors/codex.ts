@@ -47,6 +47,7 @@ import { CORS_HEADERS } from "../utils/cors.ts";
 import { projectCodexPublicError } from "../utils/codexPublicError.ts";
 import { errorResponse } from "../utils/error.ts";
 import { normalizeCodexResponsesInput } from "../utils/responsesInputNormalization.ts";
+import { createSyntheticResponsesId } from "../utils/sseHeartbeat.ts";
 import * as prl from "../utils/providerRequestLogging.ts";
 import { createRequire } from "module";
 // Quota parsing/scheduling extracted to a pure leaf; re-exported for the
@@ -487,7 +488,10 @@ function looksLikeQuotaOrRateLimit(code: string, type: string, message: string):
   );
 }
 
-function toCodexResponseFailedEvent(parsed: Record<string, unknown>): Record<string, unknown> {
+function toCodexResponseFailedEvent(
+  parsed: Record<string, unknown>,
+  syntheticResponsesId = createSyntheticResponsesId()
+): Record<string, unknown> {
   const response =
     parsed.response && typeof parsed.response === "object" && !Array.isArray(parsed.response)
       ? (parsed.response as Record<string, unknown>)
@@ -527,7 +531,7 @@ function toCodexResponseFailedEvent(parsed: Record<string, unknown>): Record<str
   return {
     type: "response.failed",
     response: {
-      id: typeof response?.id === "string" ? response.id : null,
+      id: typeof response?.id === "string" ? response.id : syntheticResponsesId,
       status: "failed",
       error,
     },
@@ -730,7 +734,10 @@ export async function peekCodexSseTransientError(
   return { matched: null, message: null, replacementBody };
 }
 
-export function encodeResponseSseEvent(raw: string): { sse: string; terminal: boolean } {
+export function encodeResponseSseEvent(
+  raw: string,
+  syntheticResponsesId = createSyntheticResponsesId()
+): { sse: string; terminal: boolean } {
   let eventType = "message";
   let payload = raw;
   let terminal = false;
@@ -740,7 +747,10 @@ export function encodeResponseSseEvent(raw: string): { sse: string; terminal: bo
     if (parsed && typeof parsed.type === "string" && parsed.type.trim()) {
       eventType = parsed.type.trim();
       if (eventType === "error" || eventType === "response.failed") {
-        const failed = toCodexResponseFailedEvent(parsed as Record<string, unknown>);
+        const failed = toCodexResponseFailedEvent(
+          parsed as Record<string, unknown>,
+          syntheticResponsesId
+        );
         payload = JSON.stringify(failed);
         eventType = "response.failed";
       }
@@ -821,7 +831,8 @@ export class CodexExecutor extends BaseExecutor {
     super("codex", PROVIDERS.codex);
   }
 
-  async execute(input: ExecuteInput) {
+  async execute(input: ExecuteInput & { syntheticResponsesId?: string }) {
+    const syntheticResponsesId = input.syntheticResponsesId ?? createSyntheticResponsesId();
     const requestBody = enforceCodexResponsesLiteParallelToolCalls(
       input.body,
       input.clientHeaders,
@@ -978,7 +989,7 @@ export class CodexExecutor extends BaseExecutor {
       const payload = JSON.stringify({
         type: "response.failed",
         response: {
-          id: null,
+          id: syntheticResponsesId,
           status: "failed",
           error: projectCodexPublicError({ status: 502, code, type: "provider_error" }),
         },
@@ -1016,7 +1027,7 @@ export class CodexExecutor extends BaseExecutor {
               typeof event.data === "string"
                 ? event.data
                 : Buffer.from(event.data as Buffer).toString("utf8");
-            const sseEvent = encodeResponseSseEvent(raw);
+            const sseEvent = encodeResponseSseEvent(raw, syntheticResponsesId);
             if (closed) return;
             // Filtered events (codex.* / empty payload) return an empty `sse` —
             // skip them so no empty frame reaches the client.

@@ -1,0 +1,40 @@
+{
+  "task": "#15365 GET + POST structured Cloudflare error handling review",
+  "scope": [
+    "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.tsx",
+    "src/app/(dashboard)/dashboard/endpoint/__tests__/cloudflared-object-error.node.test.ts",
+    "src/app/(dashboard)/dashboard/endpoint/__tests__/cloudflared-object-error.test.tsx"
+  ],
+  "method": "Static source review only; no tests, builds, installs, staging, commits, or deploys were run.",
+  "verdict": "PASS for the requested no-object-coercion and safe-rendering behavior, with a GET visibility test-coverage caveat.",
+  "findings": [],
+  "evidence": [
+    {
+      "file": "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.tsx",
+      "lines": "208-240",
+      "detail": "GET parses JSON with a null fallback. For non-OK responses it passes parsed data to extractApiErrorMessage with a human-readable fallback, then throws an Error from the extracted message. It does not stringify or render the response body."
+    },
+    {
+      "file": "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.tsx",
+      "lines": "698-741",
+      "detail": "POST parses JSON with an empty-object fallback and uses extractApiErrorMessage for non-OK responses. The catch stores error.message (or a translated fallback) in the notice rather than storing the raw response object."
+    },
+    {
+      "file": "src/app/(dashboard)/dashboard/endpoint/EndpointPageClient.tsx",
+      "lines": "1485-1516",
+      "detail": "The notice and last-error values are rendered as JSX text children. React escapes text children; no raw response body is injected as HTML."
+    },
+    {
+      "file": "src/app/(dashboard)/dashboard/endpoint/__tests__/cloudflared-object-error.node.test.ts",
+      "lines": "5-34",
+      "detail": "Coverage includes structured {code,message}, string error, missing message fallback, and malformed error values (null, number, boolean, array, and non-string message) falling back safely."
+    },
+    {
+      "file": "src/app/(dashboard)/dashboard/endpoint/__tests__/cloudflared-object-error.test.tsx",
+      "lines": "53-145",
+      "detail": "The UI test supplies structured POST and GET errors, asserts the actionable POST message is visible, checks rendered text and captured Error arguments do not contain [object Object], and verifies malformed GET error value 42 maps to the status fallback rather than being forwarded as an object/number."
+    }
+  ],
+  "caveat": "All current fetchCloudflaredStatus call sites pass silent=true (lines 499, 585, 740). The GET test verifies extraction by capturing Error constructor arguments, but does not assert a GET error notice is rendered. A non-silent invocation would render error.message through the Cloudflare notice JSX. The shared extractor implementation was not inspected because it is outside the allowed file scope; its behavior is supported here by the authorized direct tests.",
+  "changes": "No source files changed."
+}

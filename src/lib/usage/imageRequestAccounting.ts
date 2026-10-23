@@ -48,7 +48,7 @@ function upstreamUsageOf(result: unknown): Record<string, unknown> | null {
   const validCounts = TOKEN_COUNT_FIELDS.every((field) => {
     if (!Object.prototype.hasOwnProperty.call(tokenUsage, field)) return true;
     const count = tokenUsage[field];
-    return typeof count === "number" && Number.isFinite(count) && count >= 0;
+    return typeof count === "number" && Number.isSafeInteger(count) && count >= 0;
   });
   return hasTokenCount && validCounts ? tokenUsage : null;
 }

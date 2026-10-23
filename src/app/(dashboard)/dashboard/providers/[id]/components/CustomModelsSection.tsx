@@ -161,7 +161,9 @@ export default function CustomModelsSection({
   const visibleCustomModels =
     authoritativeModels === null
       ? customModels
-      : customModels.filter((model) => retainNoAuthCustomModel(model, authoritativeModels));
+      : customModels.filter((model) =>
+          retainNoAuthCustomModel({ ...model, id: model.id ?? "" }, authoritativeModels)
+        );
   const customMap = useMemo(() => buildCompatMap(customModels), [customModels]);
   const overrideMap = useMemo(() => buildCompatMap(modelCompatOverrides), [modelCompatOverrides]);
   const syncedModelIdSet = useMemo(() => new Set(syncedModelIds), [syncedModelIds]);

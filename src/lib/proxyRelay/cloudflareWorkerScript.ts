@@ -31,6 +31,7 @@
 import { randomUUID } from "crypto";
 import { resolveRelayTarget } from "@/app/api/settings/proxy/deno-deploy/route";
 import { isPrivateRelayHostname } from "@/lib/proxyRelay/privateHostname";
+import { RECORDED_BODY_BYTES_HEADER } from "@/shared/middleware/recordedBodyBytes";
 
 /**
  * Build the multipart/form-data request body for Cloudflare's Worker
@@ -113,6 +114,7 @@ async function handleRelay(request) {
     "host", "connection", "content-length", "keep-alive", "proxy-connection",
     "proxy-authenticate", "proxy-authorization", "transfer-encoding", "te", "trailer", "upgrade",
     "x-relay-target", "x-relay-path", "x-relay-auth",
+    ${JSON.stringify(RECORDED_BODY_BYTES_HEADER)},
   ].forEach((h) => headers.delete(h));
   const init = {
     method: request.method,

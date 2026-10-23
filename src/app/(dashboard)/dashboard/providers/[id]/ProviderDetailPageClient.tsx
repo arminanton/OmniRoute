@@ -787,7 +787,10 @@ export default function ProviderDetailPageClient() {
                 : {
                     ...modelMeta,
                     customModels: modelMeta.customModels.filter((model) =>
-                      retainNoAuthCustomModel(model, authoritativeModels)
+                      retainNoAuthCustomModel(
+                        { ...model, id: model.id ?? "" },
+                        authoritativeModels
+                      )
                     ),
                   }
             }

@@ -23,7 +23,7 @@ interface ConolDiscoveryRouteOptions {
   maybeReturnCachedDiscovery: () => Response | null;
   maybeReturnAutoFetchDisabled: () => Response | null;
   buildDiscoveryFallbackResponse: (warnings: DiscoveryWarnings) => Response | null;
-  buildResponse: (payload: Record<string, unknown>) => Response;
+  buildResponse: (payload: Record<string, unknown>, catalogFallback: boolean) => Response;
   buildApiDiscoveryResponse: (models: ConolModel[]) => Promise<Response>;
 }
 
@@ -61,7 +61,7 @@ export async function maybeHandleConolModelDiscovery(
       source: "local_catalog",
       intentional: true,
       warning: "No Conol session cookie — using seed model list",
-    });
+    }, true);
   }
 
   try {
@@ -92,6 +92,6 @@ export async function maybeHandleConolModelDiscovery(
       source: "local_catalog",
       intentional: true,
       warning: "API unavailable — using seed Conol model list",
-    });
+    }, true);
   }
 }

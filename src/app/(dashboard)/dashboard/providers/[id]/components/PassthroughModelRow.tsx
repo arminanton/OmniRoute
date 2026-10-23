@@ -44,6 +44,8 @@ export interface PassthroughModelRowProps {
   onToggleHidden?: (modelId: string, hidden: boolean) => Promise<void>;
   togglingHidden?: boolean;
   onTestModel?: (modelId: string, fullModel: string) => Promise<void>;
+  onBlacklistModel?: (modelId: string, fullModel: string) => Promise<void>;
+  blacklistingModelId?: string | null;
   testStatus?: "ok" | "error" | "quota" | null;
   testingModel?: boolean;
 }

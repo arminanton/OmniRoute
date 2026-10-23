@@ -13,6 +13,10 @@ import {
   type AdaptiveAdmissionRuntime,
 } from "@omniroute/open-sse/services/admission/runtime.ts";
 import type { PerTargetAdmissionHook } from "@omniroute/open-sse/services/admission/types.ts";
+import {
+  releaseChatAdmissionWhenDone,
+  type ChatAdmissionLease,
+} from "@/shared/middleware/chatBodyAdmission";
 
 import type { ReasoningCacheContext } from "@omniroute/open-sse/services/reasoningCacheContext.ts";
 import { resolveAuthenticatedAdmissionLane } from "@/shared/middleware/chatAdmissionIdentity";
@@ -40,6 +44,7 @@ export type ChatAdmissionContext = {
     principal: ReasoningCacheContext | null | undefined,
     request: { signal?: AbortSignal | null }
   ): PerTargetAdmissionHook;
+  attachFlightLease(lease: ChatAdmissionLease): void;
 };
 
 /**
@@ -241,12 +246,22 @@ export function resolveClientRawAfterAdmission(
 
 export function createChatAdmissionContext(
   getRuntime: () => AdaptiveAdmissionRuntime = getAdaptiveAdmissionRuntime
-): ChatAdmissionContext & { getAdmittedState(): AdmittedState | null } {
+): ChatAdmissionContext & {
+  getAdmittedState(): AdmittedState | null;
+  getFlightLease(): ChatAdmissionLease | null;
+} {
   let state: AdmittedState | null = null;
   let acquireStarted = false;
+  let flightLease: ChatAdmissionLease | null = null;
 
   return {
     getAdmittedState: () => state,
+    getFlightLease: () => flightLease,
+    attachFlightLease(lease) {
+      if (flightLease === lease) return;
+      flightLease?.release();
+      flightLease = lease;
+    },
     async acquire(principal, request, body) {
       // Exactly once per logical request — never re-enter the runtime.
       if (state || acquireStarted) return null;
@@ -317,15 +332,20 @@ export function withChatAdmission(
         correlationId,
         admissionContext
       );
+      const withFlightLease = releaseChatAdmissionWhenDone(
+        response,
+        admissionContext.getFlightLease()
+      );
       const admittedState = admissionContext.getAdmittedState();
-      if (!admittedState) return response;
+      if (!admittedState) return withFlightLease;
 
       const { runtime, admitted } = admittedState;
-      return runtime.attachResponseLifecycle(response, admitted.lease, {
+      return runtime.attachResponseLifecycle(withFlightLease, admitted.lease, {
         admittedAtMs: admitted.admittedAtMs,
         signal: request?.signal ?? undefined,
       });
     } catch (err) {
+      admissionContext.getFlightLease()?.release();
       const admittedState = admissionContext.getAdmittedState();
       if (admittedState) {
         const { runtime, admitted } = admittedState;

@@ -18,7 +18,12 @@
 import { createLogger } from "../utils/logger";
 import v8 from "node:v8";
 import { trackRequest } from "../../lib/gracefulShutdown";
-import { resolveIngestByteBudget, type IngestBudgetSource } from "./admissionBudget";
+import {
+  DEFAULT_STREAM_FLOOR_DIVISOR,
+  resolveFlightByteBudget,
+  resolveIngestByteBudget,
+  type IngestBudgetSource,
+} from "./admissionBudget";
 import {
   ADMISSION_BYPASS_HEADER,
   isInternalAdmissionBypass,
@@ -37,6 +42,12 @@ import {
   IngestByteAdmissionController,
   type IngestBudgetAcquireResult,
 } from "./ingestByteAdmission";
+import { rebuildRequest, stampRecordedBodyBytes } from "./recordedBodyBytes";
+export {
+  RECORDED_BODY_BYTES_HEADER,
+  recordBodyBytes,
+  readRecordedBodyBytes,
+} from "./recordedBodyBytes";
 import {
   checkResourcePressureGuard,
   getResourcePressureObservation,
@@ -216,6 +227,7 @@ export type ChatAdmissionShedReason =
   | "queued_bytes_budget"
   | "body_exceeds_budget"
   | "inflight_bytes_budget"
+  | "flight_bytes_budget"
   | "resource_pressure";
 
 /**
@@ -294,6 +306,7 @@ export class ChatAdmissionController {
   readonly #onShed: ChatAdmissionShedSink;
 
   readonly #ingestBudget: IngestByteAdmissionController;
+  readonly #flightBudget: IngestByteAdmissionController;
 
   constructor(
     readonly maxHeavyInFlight = 1,
@@ -310,6 +323,10 @@ export class ChatAdmissionController {
       maxInflightBytes?: number;
       budgetSource?: IngestBudgetSource;
       checkPressureSeverity?: () => PressureSeverity;
+    } = {},
+    flightBudget: {
+      maxFlightBytes?: number;
+      budgetSource?: IngestBudgetSource;
     } = {}
   ) {
     if (!Number.isSafeInteger(maxHeavyInFlight) || maxHeavyInFlight < 1) {
@@ -324,6 +341,13 @@ export class ChatAdmissionController {
     this.#onShed = onShed;
     this.#ingestBudget = new IngestByteAdmissionController({
       ...budgetOptions,
+      onShed: (reason, lane) => this.recordShed(reason, lane),
+    });
+    this.#flightBudget = new IngestByteAdmissionController({
+      maxInflightBytes: flightBudget.maxFlightBytes ?? Number.MAX_SAFE_INTEGER,
+      budgetSource: flightBudget.budgetSource,
+      timeoutShedReason: "flight_bytes_budget",
+      maxWaiters: DEFAULT_STREAM_FLOOR_DIVISOR,
       onShed: (reason, lane) => this.recordShed(reason, lane),
     });
   }
@@ -633,6 +657,39 @@ export class ChatAdmissionController {
   ): Promise<IngestBudgetAcquireResult> {
     return this.#ingestBudget.acquireWithin(bytes, timeoutMs, signal, sessionKey);
   }
+
+  get flightBytes(): number {
+    return this.#flightBudget.inflightBytes;
+  }
+
+  get maxFlightBytes(): number {
+    return this.#flightBudget.maxInflightBytes;
+  }
+
+  get flightBudgetSource(): IngestBudgetSource {
+    return this.#flightBudget.budgetSource;
+  }
+
+  get flightWaiting(): number {
+    return this.#flightBudget.waitingCount;
+  }
+
+  canFitFlight(bytes: number): boolean {
+    return this.#flightBudget.canFit(bytes);
+  }
+
+  tryAcquireFlight(bytes: number): ChatAdmissionLease | null {
+    return this.#flightBudget.tryAcquire(bytes);
+  }
+
+  acquireFlightWithin(
+    bytes: number,
+    timeoutMs: number,
+    signal?: AbortSignal,
+    sessionKey = "default"
+  ): Promise<IngestBudgetAcquireResult> {
+    return this.#flightBudget.acquireWithin(bytes, timeoutMs, signal, sessionKey);
+  }
 }
 
 const defaultAdmissionController = new ChatAdmissionController(CHAT_MAX_HEAVY_IN_FLIGHT);
@@ -682,6 +739,10 @@ export class PerConnectionAdmissionController {
         budgetSource?: IngestBudgetSource;
         checkPressureSeverity?: () => PressureSeverity;
       };
+      flightBudget?: {
+        maxFlightBytes?: number;
+        budgetSource?: IngestBudgetSource;
+      };
     }
   ) {
     this.#controller = new ChatAdmissionController(
@@ -689,7 +750,8 @@ export class PerConnectionAdmissionController {
       undefined,
       undefined,
       _opts?.onShed,
-      _opts?.budget
+      _opts?.budget,
+      _opts?.flightBudget
     );
   }
 
@@ -717,6 +779,11 @@ export class PerConnectionAdmissionController {
     maxInflightBytes: number;
     /** #503-fanout: which signal the budget was derived from. */
     budgetSource: IngestBudgetSource;
+    /** Estimated RSS held by active SSE streams. */
+    flightBytes: number;
+    maxFlightBytes: number;
+    flightBudgetSource: IngestBudgetSource;
+    flightWaiting: number;
     /** #503-fanout: live multi-signal resource-pressure severity. */
     pressureSeverity: PressureSeverity;
     /** #503-fanout: false on a default deployment — the legacy count cap only
@@ -734,6 +801,10 @@ export class PerConnectionAdmissionController {
       inflightBytes: this.#controller.inflightBytes,
       maxInflightBytes: this.#controller.maxInflightBytes,
       budgetSource: this.#controller.budgetSource,
+      flightBytes: this.#controller.flightBytes,
+      maxFlightBytes: this.#controller.maxFlightBytes,
+      flightBudgetSource: this.#controller.flightBudgetSource,
+      flightWaiting: this.#controller.flightWaiting,
       pressureSeverity: this.#controller.pressureSeverity(),
       countCapEnabled: this.#controller.maxHeavyInFlight < Number.MAX_SAFE_INTEGER,
     };
@@ -773,6 +844,7 @@ function resolveLegacyCountCap(): number {
 }
 
 const productionIngestBudget = resolveIngestByteBudget();
+const productionFlightBudget = resolveFlightByteBudget();
 
 export const perConnectionAdmissionController = new PerConnectionAdmissionController(
   resolveLegacyCountCap(),
@@ -781,6 +853,10 @@ export const perConnectionAdmissionController = new PerConnectionAdmissionContro
       maxInflightBytes: productionIngestBudget.bytes,
       budgetSource: productionIngestBudget.source,
       checkPressureSeverity: defaultPressureSeverity,
+    },
+    flightBudget: {
+      maxFlightBytes: productionFlightBudget.bytes,
+      budgetSource: productionFlightBudget.source,
     },
   }
 );
@@ -939,19 +1015,6 @@ function parseContentLength(header: string | null): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-function rebuildRequest(request: Request, body: Uint8Array): Request {
-  const headers = new Headers(request.headers);
-  // The inbound value may be absent or dishonest. Let the runtime derive the correct value.
-  headers.delete("content-length");
-  return new Request(request.url, {
-    method: request.method,
-    headers,
-    body,
-    signal: request.signal,
-    duplex: "half",
-  } as RequestInit & { duplex: "half" });
-}
-
 /** Reserve heavyweight capacity and ingest the body with a hard byte bound. */
 export async function admitChatRequest(
   request: Request,
@@ -981,7 +1044,13 @@ export async function admitChatRequest(
     }
     // Sniff bytes for the hard bound without reserving a lease.
     const reader = request.body?.getReader();
-    if (!reader) return { admit: true, request, lease: NULL_LEASE };
+    if (!reader) {
+      const admittedRequest = stampRecordedBodyBytes(
+        rebuildRequest(request, new Uint8Array()),
+        0
+      );
+      return { admit: true, request: admittedRequest, lease: NULL_LEASE };
+    }
     const chunks: Uint8Array[] = [];
     let totalBytes = 0;
     try {
@@ -1006,7 +1075,8 @@ export async function admitChatRequest(
       body.set(chunk, offset);
       offset += chunk.byteLength;
     }
-    return { admit: true, request: rebuildRequest(request, body), lease: NULL_LEASE };
+    const admittedRequest = stampRecordedBodyBytes(rebuildRequest(request, body), totalBytes);
+    return { admit: true, request: admittedRequest, lease: NULL_LEASE };
   }
 
   // #503-fanout: shed before spending any bytes on ingestion when the process
@@ -1079,7 +1149,10 @@ export async function admitChatRequest(
   }
 
   const reader = request.body?.getReader();
-  if (!reader) return { admit: true, request, lease };
+  if (!reader) {
+    const admittedRequest = stampRecordedBodyBytes(rebuildRequest(request, new Uint8Array()), 0);
+    return { admit: true, request: admittedRequest, lease };
+  }
 
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
@@ -1118,7 +1191,8 @@ export async function admitChatRequest(
     body.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return { admit: true, request: rebuildRequest(request, body), lease };
+  const admittedRequest = stampRecordedBodyBytes(rebuildRequest(request, body), totalBytes);
+  return { admit: true, request: admittedRequest, lease };
 }
 
 export {

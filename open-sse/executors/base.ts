@@ -22,8 +22,14 @@ import {
 } from "../config/anthropicHeaders.ts";
 import { applyContextEditingToBody } from "../config/contextEditing.ts";
 import {
+  copyForcedReasoningEffort,
+  getForcedReasoningEffort,
+} from "../utils/reasoningRuleContext.ts";
+import {
   findOffendingField,
   detectUnsupportedParam,
+  isUnsupportedThinkingError,
+  REASONING_REQUEST_FIELDS,
   stripGroqUnsupportedFields,
 } from "../config/providerFieldStrips.ts";
 import {
@@ -787,6 +793,7 @@ export class BaseExecutor {
                 ...credentials,
                 ...(refreshResult as Partial<ProviderCredentials>),
               };
+              copyForcedReasoningEffort(credentials, activeCredentials);
               await onCredentialsRefreshed(refreshResult as Partial<ProviderCredentials>);
             }
           : null;
@@ -842,6 +849,7 @@ export class BaseExecutor {
               ...credentials,
               ...refreshed,
             };
+            copyForcedReasoningEffort(credentials, activeCredentials);
             if (onCredentialsRefreshed) {
               await onCredentialsRefreshed(refreshed);
             }
@@ -886,6 +894,7 @@ export class BaseExecutor {
         body,
         activeCredentials
       );
+      copyForcedReasoningEffort(activeCredentials, requestCredentials);
       const url = this.buildUrl(model, stream, urlIndex, requestCredentials);
       const headers = this.buildHeaders(
         requestCredentials,
@@ -937,7 +946,9 @@ export class BaseExecutor {
       );
       if (this.provider === "groq") {
         transformedBody = stripGroqUnsupportedFields(
-          transformedBody as Record<string, unknown>
+          transformedBody as Record<string, unknown>,
+          model,
+          getForcedReasoningEffort(requestCredentials)
         ) as typeof transformedBody;
       }
       // A previous URL in this execute() already hit a thinking_budget 400 and
@@ -1672,14 +1683,18 @@ export class BaseExecutor {
               if (isRuntimePolicyError(error)) throw error;
               return "";
             });
+          const requestBody = transformedBody as Record<string, unknown>;
+          const reasoningFields = REASONING_REQUEST_FIELDS.filter(
+            (field) => requestBody[field] !== undefined
+          );
           const offending = findOffendingField(errText);
           if (
             offending &&
             !strippedFields.has(offending) &&
-            (transformedBody as Record<string, unknown>)[offending] !== undefined
+            requestBody[offending] !== undefined
           ) {
             strippedFields.add(offending);
-            delete (transformedBody as Record<string, unknown>)[offending];
+            delete requestBody[offending];
             let retryBody = JSON.stringify(transformedBody);
             if (usesClaudeCodeProtocol || this.provider === "claude") {
               retryBody = await signRequestBody(retryBody);
@@ -1689,6 +1704,23 @@ export class BaseExecutor {
               `Upstream 400 rejected ${offending} on ${url} — retrying without it`
             );
             response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
+          } else if (
+            isUnsupportedThinkingError(errText) &&
+            reasoningFields.some((field) => !strippedFields.has(field))
+          ) {
+            for (const field of reasoningFields) {
+              strippedFields.add(field);
+              delete requestBody[field];
+            }
+            let retryBody = JSON.stringify(transformedBody);
+            if (usesClaudeCodeProtocol || this.provider === "claude") {
+              retryBody = await signRequestBody(retryBody);
+            }
+            log?.info?.(
+              "REASONING_SANITIZE",
+              `Upstream 400 rejected reasoning on ${url} — retrying without reasoning fields`
+            );
+            response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
           } else {
             // Auto-learn: detect "Unsupported parameter" errors and persist to DB
             // when the provider config has autoLearn enabled (#6625).
@@ -1696,7 +1728,7 @@ export class BaseExecutor {
             if (
               autoLearned &&
               !strippedFields.has(autoLearned) &&
-              (transformedBody as Record<string, unknown>)[autoLearned] !== undefined
+              requestBody[autoLearned] !== undefined
             ) {
               try {
                 const config = getParamFilterConfig(this.provider);
@@ -1704,7 +1736,7 @@ export class BaseExecutor {
                 if (shouldAutoLearn) {
                   strippedFields.add(autoLearned);
                   addParamToBlocklist(this.provider, autoLearned, model);
-                  delete (transformedBody as Record<string, unknown>)[autoLearned];
+                  delete requestBody[autoLearned];
                   let retryBody = JSON.stringify(transformedBody);
                   if (usesClaudeCodeProtocol || this.provider === "claude") {
                     retryBody = await signRequestBody(retryBody);

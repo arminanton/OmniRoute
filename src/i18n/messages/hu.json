@@ -1889,7 +1889,14 @@
     "readinessStep3": "Copy your endpoint",
     "readinessStep4": "Send a test request",
     "readinessContinue": "Continue setup",
-    "readinessDismiss": "Dismiss for now"
+    "readinessDismiss": "Dismiss for now",
+    "unpricedUsageTitle": "{count, plural, one {# modellt a közelmúltban használták, de nincs árazás beállítva} other {# modelleket a közelmúltban használták, de nincs árazás beállítva}}",
+    "unpricedUsageFailClosed": "{keys, plural, one {# használati korláttal rendelkező API-kulcs az elmúlt 8 napban használta ezeket a modelleket. Amíg ez a használat a kulcs napi vagy heti időablakán belül esik, a kulcs túllépettnek számít és a kérései blokkolva lesznek (UNPRICED_USAGE_BUDGET_POLICY=fail_closed).} other {# használati korláttal rendelkező API-kulcsok az elmúlt 8 napban használták ezeket a modelleket. Amíg ez a használat egy kulcs napi vagy heti időablakán belül esik, a kulcsokat túllépettnek tekintik és a kéréseiket blokkolják (UNPRICED_USAGE_BUDGET_POLICY=fail_closed).}}",
+    "unpricedUsageCountAsZero": "Ez a használat $0-ként számít a kulcsonkénti használati korlátok felé (UNPRICED_USAGE_BUDGET_POLICY=count_as_zero).",
+    "unpricedUsageModelStats": "{requests, plural, one {# kérés} other {# kérések}}, {keys, plural, one {# korlátozott kulcs} other {# korlátozott kulcsok}}",
+    "unpricedUsageMore": "…és még {count} további",
+    "unpricedUsageConfigure": "Árazás beállítása",
+    "unpricedUsageDismiss": "Bezárás"
   },
   "analytics": {
     "title": "Analytics",
@@ -12867,7 +12874,9 @@
       "disabled": "Letiltva",
       "dual": "Kettős",
       "alias": "Alias",
-      "canonical": "Kanonikus"
+      "canonical": "Kanonikus",
+      "fail_closed": "Blokkolás (fail_closed)",
+      "count_as_zero": "$0-ként számol (count_as_zero)"
     },
     "definitions": {
       "REQUIRE_API_KEY": {
@@ -12996,6 +13005,10 @@
       },
       "SKILLS_SANDBOX_NETWORK_ENABLED": {
         "description": "Hálózati hozzáférés engedélyezése a készségek homokozójában."
+      },
+      "UNPRICED_USAGE_BUDGET_POLICY": {
+        "label": "Árazatlan használati költségpolitika",
+        "description": "Hogyan kezelik a kulcsonkénti napi/hetentei USD-korlátok a sikeres használatot, amelynél a szolgáltatónál vagy a modellnél nincs árazási bejegyzés. fail_closed (alapértelmezett) a periódust túllépettnek jelöli, így egy ismeretlen költség soha nem kerülhet át a kemény plafonon. count_as_zero ezt a használatot $0-ként számolja, és továbbra is érvényesíti a beárazott költést. Az árazatlan modelleket mindenesetre listázza a műszerfal kezdőlapja."
       }
     }
   },

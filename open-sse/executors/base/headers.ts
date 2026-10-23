@@ -45,7 +45,8 @@ export function applyHuggingFaceBillToHeader(
   if (
     typeof rawBillTo !== "string" ||
     rawBillTo.length > 500 ||
-    /[\u0000-\u001f\u007f-\u009f]/.test(rawBillTo)
+    /[\u0000-\u001f\u007f-\u009f]/.test(rawBillTo) ||
+    /[^\u0000-\u00ff]/.test(rawBillTo)
   ) {
     return;
   }

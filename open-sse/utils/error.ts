@@ -111,6 +111,8 @@ const SAFE_PUBLIC_ERROR_IDENTIFIERS = new Set([
   "etimedout",
   "executor_error",
   "feature_disabled",
+  "flight_bytes_budget",
+  "flight_ceiling",
   "gateway_timeout",
   "gemini_tpm_exhausted",
   "gcp_project_required",

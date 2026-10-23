@@ -121,6 +121,8 @@ export default function PassthroughModelsSection({
   modelTestStatus,
   onModelTestStatusChange,
   testingModelId,
+  onBlacklistModel,
+  blacklistingModelId,
   providerId,
   connectionId,
   // Bug #3610 fix 1: use the prop value when provided; fall back to local state only

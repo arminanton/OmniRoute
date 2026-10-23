@@ -1889,7 +1889,14 @@
     "readinessStep3": "Copy your endpoint",
     "readinessStep4": "Send a test request",
     "readinessContinue": "Continue setup",
-    "readinessDismiss": "Dismiss for now"
+    "readinessDismiss": "Dismiss for now",
+    "unpricedUsageTitle": "{count, plural, one {# модель} few {# модели} many {# моделей} other {# моделей}} с недавней активностью, но без настроенной цены",
+    "unpricedUsageFailClosed": "{keys, plural, one {# API-ключ с ограничением использования} few {# API-ключа с ограничением использования} many {# API-ключей с ограничением использования} other {# API-ключей с ограничением использования}} использовали эти модели за последние 8 дней. Пока это использование попадает в ежедневное или недельное окно ключа, ключ считается превышающим квоту и его запросы блокируются (UNPRICED_USAGE_BUDGET_POLICY=fail_closed).",
+    "unpricedUsageCountAsZero": "Это использование засчитывается как $0 в счёт лимитов использования по ключу (UNPRICED_USAGE_BUDGET_POLICY=count_as_zero).",
+    "unpricedUsageModelStats": "{requests, plural, one {# запрос} few {# запроса} many {# запросов} other {# запроса}}, {keys, plural, one {# ключ с лимитом} few {# ключа с лимитом} many {# ключей с лимитом} other {# ключей с лимитом}}",
+    "unpricedUsageMore": "…и ещё {count}",
+    "unpricedUsageConfigure": "Настроить цены",
+    "unpricedUsageDismiss": "Закрыть"
   },
   "analytics": {
     "title": "Аналитика",
@@ -12867,7 +12874,9 @@
       "disabled": "Disabled",
       "dual": "Dual",
       "alias": "Alias",
-      "canonical": "Canonical"
+      "canonical": "Canonical",
+      "fail_closed": "Блокировать (fail_closed)",
+      "count_as_zero": "Зачислять как $0 (count_as_zero)"
     },
     "definitions": {
       "REQUIRE_API_KEY": {
@@ -12996,6 +13005,10 @@
       },
       "SKILLS_SANDBOX_NETWORK_ENABLED": {
         "description": "Enable network access in the skills sandbox."
+      },
+      "UNPRICED_USAGE_BUDGET_POLICY": {
+        "label": "Политика бюджета для использования без цены",
+        "description": "Как ежедневные/недельные USD‑лимиты по ключу обрабатывают успешное использование, для которого у провайдера/модели нет строки с ценой. fail_closed (по умолчанию) помечает окно как превышенное, поэтому неизвестная стоимость никогда не сможет пройти мимо жёсткого лимита. count_as_zero считает такое использование равным $0 и продолжает применять ограничения к расходам, для которых задана цена. Модели без цены в любом случае отображаются на главной странице панели управления."
       }
     }
   },

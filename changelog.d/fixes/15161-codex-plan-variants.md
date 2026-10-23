@@ -1,0 +1,1 @@
+Codex Pro plan variants now display as Pro Standard, Pro Extra, and Pro Max. They count under Pro in Provider Limits, and provider connection labels fall back to `workspacePlanType`. These are display/classification changes only; upstream entitlements remain unchanged.

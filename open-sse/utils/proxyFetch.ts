@@ -2,6 +2,7 @@
 import "./setupPolyfill.ts";
 import { prepareOwnListenerSelfHop } from "./selfHop.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { types as utilTypes } from "node:util";
 import {
   assertNoApplicationProxy,
   getRuntimePolicy,
@@ -10,7 +11,7 @@ import {
 import {
   isProxyFetchExhaustedTransportError,
   markProxyFetchExhaustedTransportError,
-} from "@/shared/utils/httpClientAbortGuard.mjs";
+} from "../../src/shared/utils/proxyFetchProvenance.mjs";
 import { fetch as undiciFetch, Agent } from "undici";
 import {
   buildVercelRelayHeaders,
@@ -35,6 +36,7 @@ import {
   isDirectResponseStartTimeout,
   resolveDirectHeadersTimeoutMs,
 } from "./directResponseStartTimeout.ts";
+export { isProxyFetchExhaustedTransportError };
 
 // #9100: relay egress (Vercel / Deno / Cloudflare edge functions) used to go
 // through bare `originalFetch` — NO connection pooling, NO timeout, NO retry.
@@ -142,9 +144,9 @@ export function setTlsClientForTest(client: TlsClientLike | null): void {
 
 // #8376: transport-level connect-failure codes that mean "the configured upstream
 // proxy (or the target itself, for direct egress) is unreachable" — as opposed to an
-// ordinary upstream HTTP error. Read `.code` first (stable across undici/node
-// versions); native fetch wraps the real socket error in `.cause`, so fall back to
-// `.cause.code` when the top-level error is a bare "fetch failed" TypeError.
+// ordinary upstream HTTP error. Undici's native fetch wraps socket failures in a
+// TypeError("fetch failed") whose `cause` carries the transport code. Never trust
+// error-shaped `.code` / `.causeCode` fields on the wrapper itself.
 const PROXY_UNREACHABLE_ERROR_CODES = new Set([
   "EAI_AGAIN",
   "ENOTFOUND",
@@ -159,21 +161,34 @@ const PROXY_UNREACHABLE_ERROR_CODES = new Set([
   "ERR_HTTP2_STREAM_ERROR",
 ]);
 
-function getProxyUnreachableErrorCode(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") return undefined;
-  const e = err as { code?: unknown; causeCode?: unknown; cause?: unknown };
-  const causeCode =
-    e.cause && typeof e.cause === "object" ? (e.cause as { code?: unknown }).code : undefined;
-  // Do not trust message text: a thrown programming error can imitate a transport code.
-  for (const code of [e.code, e.causeCode, causeCode]) {
-    if (typeof code === "string" && PROXY_UNREACHABLE_ERROR_CODES.has(code)) return code;
+function getProxyNativeNetworkCause(err: unknown): (Error & { code: string }) | undefined {
+  try {
+    if (!utilTypes.isNativeError(err) || !(err instanceof TypeError) || err.message !== "fetch failed") {
+      return undefined;
+    }
+    const cause = (err as TypeError & { cause?: unknown }).cause;
+    if (!utilTypes.isNativeError(cause) || !(cause instanceof Error)) return undefined;
+    const code = (cause as Error & { code?: unknown }).code;
+    return typeof code === "string" && PROXY_UNREACHABLE_ERROR_CODES.has(code)
+      ? (cause as Error & { code: string })
+      : undefined;
+  } catch {
+    return undefined;
   }
-  return undefined;
+}
+
+function getProxyUnreachableErrorCode(err: unknown): string | undefined {
+  return getProxyNativeNetworkCause(err)?.code;
 }
 
 function isProxyUnreachableError(err: unknown): boolean {
   return getProxyUnreachableErrorCode(err) !== undefined;
 }
+// Keep the existing read-only name for current consumers.
+export function isVerifiedProxyFetchExhaustedError(value: unknown): boolean {
+  return isProxyFetchExhaustedTransportError(value);
+}
+
 /**
  * #8376: tag a connect-failure error with a stable `.code`/`.errorCode` BEFORE it is
  * rethrown, so chatCore's catch block (and, through the response body, the combo
@@ -181,33 +196,6 @@ function isProxyUnreachableError(err: unknown): boolean {
  * falling through to a generic 502 that never trips the whole-provider breaker on a
  * homogeneous same-provider combo pool. No-op when the error isn't connect-shaped.
  */
-// Object-identity provenance: provider JSON/code/message cannot forge this brand.
-// Add it only at a terminal transport throw, after all eligible retry/fallback
-// paths have failed. The early tagProxyUnreachable classification is NOT proof.
-function markVerifiedExhaustedTransportError<T>(err: T): T {
-  if (!err || typeof err !== "object") return err;
-  const e = err as {
-    code?: unknown;
-    errorCode?: unknown;
-    causeCode?: unknown;
-    cause?: unknown;
-  };
-  const causeCode =
-    e.causeCode ??
-    (e.cause && typeof e.cause === "object" ? (e.cause as { code?: unknown }).code : undefined);
-  const taggedUnreachable = e.code === "PROXY_UNREACHABLE" && e.errorCode === "proxy_unreachable";
-  const exhaustedNetworkFailure =
-    e.code === "PROXY_REQUEST_FAILED" &&
-    typeof causeCode === "string" &&
-    PROXY_UNREACHABLE_ERROR_CODES.has(causeCode);
-  if (taggedUnreachable || exhaustedNetworkFailure) markProxyFetchExhaustedTransportError(err);
-  return err;
-}
-
-export function isVerifiedProxyFetchExhaustedError(value: unknown): boolean {
-  return isProxyFetchExhaustedTransportError(value);
-}
-
 function tagProxyUnreachable<T>(err: T): T {
   if (isProxyUnreachableError(err)) {
     const e = err as Error & { code?: string; errorCode?: string };
@@ -818,7 +806,7 @@ export async function runWithProxyContext(
         err.code = "PROXY_UNREACHABLE";
         err.errorCode = "proxy_unreachable";
         err.statusCode = 503;
-        throw markVerifiedExhaustedTransportError(err);
+        throw err;
       }
 
       if (winner.kind === "probe") {
@@ -1073,7 +1061,7 @@ async function patchedFetch(
             if (dispatcherError instanceof Error) {
               (dispatcherError as Error & { proxyFetchDetail?: string }).proxyFetchDetail = detail;
             }
-            throw markVerifiedExhaustedTransportError(tagProxyUnreachable(dispatcherError));
+            throw tagProxyUnreachable(dispatcherError);
           }
 
           // Exhausted attempts: try proxy fallback before native fetch.
@@ -1119,7 +1107,7 @@ async function patchedFetch(
               (nativeError as Error & { proxyFetchDetail?: string }).proxyFetchDetail = detail;
             }
             tagProxyUnreachable(nativeError);
-            throw markVerifiedExhaustedTransportError(nativeError);
+            throw nativeError;
           }
         }
         tagProxyUnreachable(dispatcherError);
@@ -1230,7 +1218,7 @@ async function patchedFetch(
           await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
           continue;
         }
-        throw markVerifiedExhaustedTransportError(tagProxyUnreachable(relayError));
+        throw tagProxyUnreachable(relayError);
       } finally {
         clearTimeout(relayTimer);
         options.signal?.removeEventListener("abort", onCallerAbort);
@@ -1350,7 +1338,7 @@ async function patchedFetch(
       console.error(
         `[ProxyFetch] Proxy request failed (${source}, fail-closed; code=${sanitized.code})`
       );
-      throw markVerifiedExhaustedTransportError(sanitized);
+      throw markProxyFetchExhaustedTransportError(sanitized, error);
     }
   }
   throw lastProxyError;

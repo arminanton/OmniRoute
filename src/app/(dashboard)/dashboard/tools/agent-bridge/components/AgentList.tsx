@@ -42,6 +42,28 @@ export function AgentList({
 
   const stateByAgent = Object.fromEntries(agentStates.map((s) => [s.agent_id, s]));
 
+  const handleReset = async (agentId: string): Promise<boolean> => {
+    // Reuse the DNS action's privileged-password flow before the full reset.
+    await onDnsToggle(agentId, false);
+    const response = await fetch(
+      `/api/tools/agent-bridge/agents/${encodeURIComponent(agentId)}/reset`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      }
+    );
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: { message?: string };
+      };
+      throw new Error(payload.error?.message ?? `HTTP ${response.status}`);
+    }
+    // Refresh the parent data after the reset endpoint cleared server state.
+    await onMappingsSave(agentId, []);
+    return true;
+  };
+
   const filtered = targets.filter((target) => {
     // Search filter
     if (search) {
@@ -140,6 +162,7 @@ export function AgentList({
               mappings={mappingsMap[target.id] ?? []}
               onDnsToggle={onDnsToggle}
               onMappingsSave={onMappingsSave}
+              onReset={handleReset}
             />
           ))
         )}

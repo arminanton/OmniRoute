@@ -258,7 +258,11 @@ export async function GET(
       return mergeModelsWithCustomPrecedence(base, customRows);
     };
 
-    const buildResponse = (payload: any, statusConfig?: ResponseInit) => {
+    const buildResponse = (
+      payload: any,
+      statusConfig?: ResponseInit,
+      catalogFallback = false
+    ) => {
       if (payload.models && Array.isArray(payload.models)) {
         payload.models = mergeCustomModels(payload.models);
         payload.models = filterModelsForRoute(provider, payload.models, chatOnly);
@@ -266,6 +270,7 @@ export async function GET(
       if (excludeHidden && payload.models && Array.isArray(payload.models)) {
         payload.models = payload.models.filter((m: any) => !getModelIsHidden(provider, m.id));
       }
+      payload.catalogFallback = catalogFallback;
       return NextResponse.json(payload, statusConfig);
     };
 
@@ -289,6 +294,7 @@ export async function GET(
           provider,
           connectionId,
           models: visibleModels,
+          catalogFallback: false,
           source: catalog.source,
           ...(catalog.warning ? { warning: catalog.warning } : {}),
         },
@@ -354,16 +360,24 @@ export async function GET(
       }));
     };
 
-    const buildCachedDiscoveryResponse = (warning?: string) =>
-      buildResponse({
-        provider,
-        connectionId,
-        models: cachedDiscoveryModels,
-        source: "cache",
-        ...(warning ? { warning } : {}),
-      });
+    const buildCachedDiscoveryResponse = (warning?: string, catalogFallback = false) =>
+      buildResponse(
+        {
+          provider,
+          connectionId,
+          models: cachedDiscoveryModels,
+          source: "cache",
+          ...(warning ? { warning } : {}),
+        },
+        undefined,
+        catalogFallback
+      );
 
-    const buildLocalCatalogResponse = (warning?: string, intentional = false) => {
+    const buildLocalCatalogResponse = (
+      warning?: string,
+      intentional = false,
+      catalogFallback = false
+    ) => {
       const localModels = toLocalCatalogModels();
       if (localModels.length === 0) return null;
       return buildResponse({
@@ -376,69 +390,77 @@ export async function GET(
         // of treating them as a degraded remote-fetch failure (502).
         ...(intentional ? { intentional: true } : {}),
         ...(warning ? { warning } : {}),
-      });
-    };
+      },
+      undefined,
+      catalogFallback
+    );
+  };
 
-    const buildDiscoveryFallbackResponse = ({
-      cacheWarning = "API unavailable — using cached catalog",
-      localWarning = "API unavailable — using local catalog",
-      localIntentional = false,
-    }: {
+  const buildDiscoveryFallbackResponse = ({
+    cacheWarning = "API unavailable — using cached catalog",
+    localWarning = "API unavailable — using local catalog",
+    localIntentional = false,
+  }: {
+    cacheWarning?: string;
+    localWarning?: string;
+    localIntentional?: boolean;
+  } = {}) => {
+    if (cachedDiscoveryModels.length > 0) {
+      return buildCachedDiscoveryResponse(cacheWarning, true);
+    }
+    return buildLocalCatalogResponse(localWarning, localIntentional, true);
+  };
+
+  const buildDiscoveryErrorFallbackResponse = (
+    error: unknown,
+    warnings?: {
       cacheWarning?: string;
       localWarning?: string;
-      localIntentional?: boolean;
-    } = {}) => {
-      if (cachedDiscoveryModels.length > 0) {
-        return buildCachedDiscoveryResponse(cacheWarning);
-      }
-      return buildLocalCatalogResponse(localWarning, localIntentional);
-    };
-
-    const buildDiscoveryErrorFallbackResponse = (
-      error: unknown,
-      warnings?: {
-        cacheWarning?: string;
-        localWarning?: string;
-      }
-    ) => {
-      // #6267 — a models-endpoint redirect (307/308) is not a fixable-config
-      // error. safeOutboundFetch throws REDIRECT_BLOCKED which
-      // getSafeOutboundFetchErrorStatus maps to 503, but unlike the other 503
-      // Redirect blocks degrade to the local/cached catalog; invalid URLs remain hard errors.
-      if (error instanceof SafeOutboundFetchError && error.code === "REDIRECT_BLOCKED") {
-        return buildDiscoveryFallbackResponse(warnings);
-      }
-      const status = getSafeOutboundFetchErrorStatus(error);
-      if (status === 400 || status === 503 || status === 504) return null;
-      return buildDiscoveryFallbackResponse(warnings);
-    };
-
-    if (provider === "adobe-firefly") {
-      const discovery = await getAdobeModels(apiKey, accessToken, connection.providerSpecificData);
-      return buildResponse({ provider, connectionId, ...discovery });
     }
+  ) => {
+    // #6267 — a models-endpoint redirect (307/308) is not a fixable-config
+    // error. safeOutboundFetch throws REDIRECT_BLOCKED which
+    // getSafeOutboundFetchErrorStatus maps to 503, but unlike the other 503
+    // Redirect blocks degrade to the local/cached catalog; invalid URLs remain hard errors.
+    if (error instanceof SafeOutboundFetchError && error.code === "REDIRECT_BLOCKED") {
+      return buildDiscoveryFallbackResponse(warnings);
+    }
+    const status = getSafeOutboundFetchErrorStatus(error);
+    if (status === 400 || status === 503 || status === 504) return null;
+    return buildDiscoveryFallbackResponse(warnings);
+  };
 
-    const maybeReturnCachedDiscovery = () => {
-      if (!refresh && cachedDiscoveryModels.length > 0) {
-        return buildCachedDiscoveryResponse();
-      }
-      return null;
-    };
+  if (provider === "adobe-firefly") {
+    const discovery = await getAdobeModels(apiKey, accessToken, connection.providerSpecificData);
+    return buildResponse(
+      { provider, connectionId, ...discovery },
+      undefined,
+      discovery.source === "local_catalog"
+    );
+  }
 
-    const maybeReturnAutoFetchDisabled = () => {
-      if (refresh || autoFetchModels) return null;
-      const fallback = buildDiscoveryFallbackResponse({
-        cacheWarning: "Auto-fetch disabled — using cached catalog",
-        localWarning: "Auto-fetch disabled — using local catalog",
-      });
-      if (fallback) return fallback;
-      return buildResponse({
+  const maybeReturnCachedDiscovery = () => {
+    if (!refresh && cachedDiscoveryModels.length > 0) {
+      return buildCachedDiscoveryResponse();
+    }
+    return null;
+  };
+
+  const maybeReturnAutoFetchDisabled = () => {
+    if (refresh || autoFetchModels) return null;
+    const fallback = buildDiscoveryFallbackResponse({
+      cacheWarning: "Auto-fetch disabled — using cached catalog",
+      localWarning: "Auto-fetch disabled — using local catalog",
+    });
+    if (fallback) return fallback;
+    return buildResponse(
+      {
         provider,
         connectionId,
         models: [],
         source: "local_catalog",
         warning: "Auto-fetch disabled — no cached models available",
-      });
+      }, undefined, true);
     };
 
     const buildApiDiscoveryResponse = async (
@@ -510,7 +532,7 @@ export async function GET(
           models: freshLocal,
           source: "local_catalog",
           warning: "No remote models discovered — using local catalog",
-        });
+        }, undefined, true);
       }
 
       return buildResponse({
@@ -561,7 +583,7 @@ export async function GET(
           source: "local_catalog",
           intentional: true,
           warning: "No PromptQL Bearer JWT — using seed model list",
-        });
+        }, undefined, true);
       }
 
       try {
@@ -592,7 +614,7 @@ export async function GET(
           source: "local_catalog",
           intentional: true,
           warning: "API unavailable — using seed PromptQL model list",
-        });
+        }, undefined, true);
       }
     }
 
@@ -619,7 +641,7 @@ export async function GET(
           source: "local_catalog",
           intentional: true,
           warning: "No token_v2 cookie — using seed Notion AI model list",
-        });
+        }, undefined, true);
       }
 
       try {
@@ -651,7 +673,7 @@ export async function GET(
           source: "local_catalog",
           intentional: true,
           warning: "API unavailable — using seed Notion AI model list",
-        });
+        }, undefined, true);
       }
     }
 
@@ -690,7 +712,7 @@ export async function GET(
           models: MAXAI_REGISTRY_MODELS,
           source: "local_catalog",
           warning: "MaxAI catalog unavailable — using curated model list",
-        });
+        }, undefined, true);
       }
     }
 
@@ -704,7 +726,8 @@ export async function GET(
       maybeReturnCachedDiscovery,
       maybeReturnAutoFetchDisabled,
       buildDiscoveryFallbackResponse,
-      buildResponse,
+      buildResponse: (payload, catalogFallback) =>
+        buildResponse(payload, undefined, catalogFallback),
       buildApiDiscoveryResponse,
     });
     if (conolResponse) return conolResponse;
@@ -938,7 +961,7 @@ export async function GET(
           models,
           source: "local_catalog",
           warning: "API unavailable — using local catalog",
-        });
+        }, undefined, true);
       }
       return buildApiDiscoveryResponse(models);
     }
@@ -981,7 +1004,7 @@ export async function GET(
           models: toLocalCatalogModels(),
           source: "local_catalog",
           warning: "Deployment URL does not expose catalog — using local catalog",
-        });
+        }, undefined, true);
       }
 
       const catalogUrl = buildDataRobotCatalogUrl(configuredBaseUrl);
@@ -1639,7 +1662,7 @@ export async function GET(
           models: staticModels,
           source: "local_catalog",
           warning: "OAuth token unavailable — using local catalog",
-        });
+        }, undefined, true);
       }
 
       const remoteModels = await fetchAntigravityDiscoveryModelsCached(
@@ -1662,7 +1685,7 @@ export async function GET(
         models: staticModels,
         source: "local_catalog",
         ...(usesCuratedModelsOnly ? {} : { warning: "API unavailable — using local catalog" }),
-      });
+      }, undefined, !usesCuratedModelsOnly);
     }
 
     if (provider === "github") {
@@ -1723,7 +1746,7 @@ export async function GET(
         models: discovery.models,
         source: "local_catalog",
         warning: "Copilot models API unavailable — using local catalog",
-      });
+      }, undefined, true);
     }
 
     if (provider === "ghe-copilot") {
@@ -1770,7 +1793,7 @@ export async function GET(
         models: [],
         source: "local_catalog",
         warning: "GHE Copilot models API unavailable — using local catalog",
-      });
+      }, undefined, true);
     }
 
     if (provider === "kiro") {
@@ -1799,7 +1822,7 @@ export async function GET(
           models: toLocalCatalogModels(),
           source: "local_catalog",
           warning: "OAuth token unavailable — using local catalog",
-        });
+        }, undefined, true);
       }
 
       const discovery = await fetchKiroAvailableModels({
@@ -1830,7 +1853,7 @@ export async function GET(
         models: discovery.models,
         source: "local_catalog",
         warning: "Kiro models API unavailable — using local catalog",
-      });
+      }, undefined, true);
     }
 
     if (provider === "vertex" || provider === "vertex-partner") {
@@ -2114,7 +2137,7 @@ export async function GET(
           models: finalizeCodexCatalog([]),
           source: "local_catalog",
           warning: "Auto-fetch disabled — using local catalog",
-        });
+        }, undefined, true);
       }
 
       const liveModels = await fetchCodexDiscoveryModels({
@@ -2163,7 +2186,7 @@ export async function GET(
           models: cachedCatalogModels,
           source: "cache",
           warning: "Codex live catalog unavailable — using cached catalog",
-        });
+        }, undefined, true);
       }
       return buildResponse({
         provider,
@@ -2172,7 +2195,7 @@ export async function GET(
         source: "local_catalog",
         intentional: true,
         warning: "Codex live and GitHub catalogs unavailable — using local catalog",
-      });
+      }, undefined, true);
     }
 
     const localCatalog = mergeLocalCatalogModels(registryCatalogModels, specialtyCatalogModels);

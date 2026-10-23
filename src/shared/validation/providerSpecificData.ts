@@ -208,12 +208,13 @@ export function validateProviderSpecificData(
     billTo !== null &&
     (typeof billTo !== "string" ||
       billTo.length > 500 ||
-      /[\u0000-\u001f\u007f-\u009f]/.test(billTo))
+      /[\u0000-\u001f\u007f-\u009f]/.test(billTo) ||
+      /[^\u0000-\u00ff]/.test(billTo))
   ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message:
-        "providerSpecificData.billTo must be a string up to 500 chars without control characters",
+        "providerSpecificData.billTo must be a string up to 500 chars without control characters or code points above U+00FF",
       path: ["billTo"],
     });
   }

@@ -5,8 +5,12 @@
  * Restore only this agent's hosts, model mappings, and setup state.
  */
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import { isIP } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { AgentBridgeResetBodySchema } from "@/shared/schemas/agentBridge";
-import { checkDNSEntryForAgent, removeDNSEntry } from "@/mitm/dns/dnsConfig";
+import { removeDNSEntries, resolveHostsForAgent } from "@/mitm/dns/dnsConfig";
 import {
   getAgentBridgeState,
   getAllAgentBridgeStates,
@@ -38,6 +42,61 @@ function flushWindowsDnsCache(): void {
   }
 }
 
+function normalizeHost(host: string): string {
+  return host.toLowerCase().replace(/\.$/, "");
+}
+
+function getAgentDnsResetPlan(
+  agentId: string,
+  states: ReturnType<typeof getAllAgentBridgeStates>
+): { hostsToRemove: string[]; hostsPreservedForOtherAgents: string[] } {
+  const selectedHosts = resolveHostsForAgent(agentId);
+  const siblingHosts = new Set(
+    states
+      .filter((state) => state.agent_id !== agentId && state.dns_enabled)
+      .flatMap((state) => resolveHostsForAgent(state.agent_id))
+      .map(normalizeHost)
+  );
+  const hostsToRemove = selectedHosts.filter((host) => !siblingHosts.has(normalizeHost(host)));
+  const hostsPreservedForOtherAgents = selectedHosts.filter((host) =>
+    siblingHosts.has(normalizeHost(host))
+  );
+  return { hostsToRemove, hostsPreservedForOtherAgents };
+}
+
+function hostsFilePath(): string {
+  if (os.platform() === "win32") {
+    return path.join(
+      process.env.SystemRoot || "C:\\Windows",
+      "System32",
+      "drivers",
+      "etc",
+      "hosts"
+    );
+  }
+  return "/etc/hosts";
+}
+
+function readHostsFile(): string | null {
+  try {
+    return fs.readFileSync(hostsFilePath(), "utf8");
+  } catch {
+    // An unreadable hosts file cannot be treated as proof that entries are absent.
+    return null;
+  }
+}
+
+function hasDnsEntriesForHosts(hosts: string[], hostsContent: string): boolean {
+  const selectedHosts = new Set(hosts.map(normalizeHost));
+  if (selectedHosts.size === 0) return false;
+
+  return hostsContent.split(/\r?\n/).some((line) => {
+    const parts = line.split("#", 1)[0].trim().split(/\s+/).filter(Boolean);
+    if (parts.length < 2 || isIP(parts[0]) === 0) return false;
+    return parts.slice(1).some((host) => selectedHosts.has(normalizeHost(host)));
+  });
+}
+
 export async function POST(request: Request, { params }: Params): Promise<Response> {
   const { id } = await params;
 
@@ -66,8 +125,9 @@ export async function POST(request: Request, { params }: Params): Promise<Respon
   }
 
   try {
-    await removeDNSEntry(sudoPassword, id);
-    flushWindowsDnsCache();
+    const dnsResetPlan = getAgentDnsResetPlan(id, getAllAgentBridgeStates());
+    await removeDNSEntries(dnsResetPlan.hostsToRemove, sudoPassword);
+    if (dnsResetPlan.hostsToRemove.length > 0) flushWindowsDnsCache();
     setMappings(id, []);
     syncAgentBridgeMappingsToMitmAlias(id);
     upsertAgentBridgeState({ agent_id: id, dns_enabled: false, setup_completed: false });
@@ -75,16 +135,27 @@ export async function POST(request: Request, { params }: Params): Promise<Respon
     const suppliedPassword = normalizeMitmSudoPasswordInput(parsed.data.sudoPassword ?? "");
     if (process.platform !== "win32" && suppliedPassword) setCachedPassword(suppliedPassword);
 
-    const dnsEntryPresent = checkDNSEntryForAgent(id);
+    const hostsContent = dnsResetPlan.hostsToRemove.length > 0 ? readHostsFile() : "";
+    const dnsEntriesRemain =
+      hostsContent === null
+        ? null
+        : hasDnsEntriesForHosts(dnsResetPlan.hostsToRemove, hostsContent);
+    const dnsCleared = dnsEntriesRemain === false;
     const mappingsCleared = getMappingsForAgent(id).length === 0;
     const state = getAgentBridgeState(id);
     const stateCleared = state !== null && !state.dns_enabled && !state.setup_completed;
-    const verified = !dnsEntryPresent && mappingsCleared && stateCleared;
+    const verified = dnsCleared && mappingsCleared && stateCleared;
     if (!verified) {
       return createErrorResponse({
         status: 500,
         message: "Agent reset could not be verified",
-        details: { verified, dnsEntryPresent, mappingsCleared, stateCleared },
+        details: {
+          verified,
+          dnsEntriesRemain,
+          dnsCheckSucceeded: hostsContent !== null,
+          mappingsCleared,
+          stateCleared,
+        },
       });
     }
 
@@ -94,6 +165,7 @@ export async function POST(request: Request, { params }: Params): Promise<Respon
       dns_enabled: false,
       mappingsCleared,
       verified,
+      dnsHostsPreservedForOtherAgents: dnsResetPlan.hostsPreservedForOtherAgents,
       otherAgentsStillActive: getAllAgentBridgeStates().some(
         (otherState) => otherState.agent_id !== id && otherState.dns_enabled
       ),

@@ -1889,7 +1889,14 @@
     "readinessStep3": "Copy your endpoint",
     "readinessStep4": "Send a test request",
     "readinessContinue": "Continue setup",
-    "readinessDismiss": "Dismiss for now"
+    "readinessDismiss": "Dismiss for now",
+    "unpricedUsageTitle": "{count, plural, one {# मॉडल} other {# मॉडल}} जिनका हाल ही में उपयोग हुआ लेकिन कोई निर्धारित कीमत कॉन्फ़िगर नहीं है",
+    "unpricedUsageFailClosed": "{keys, plural, one {# उपयोग सीमा वाली API कुंजी} other {# उपयोग सीमा वाली API कुंजियाँ}} ने पिछले 8 दिनों में इन मॉडलों का उपयोग किया। जब यह उपयोग किसी कुंजी की दैनिक या साप्ताहिक विंडो में आता है, तो कुंजी को कोटा से बाहर माना जाता है और उसके अनुरोध ब्लॉक कर दिए जाते हैं (UNPRICED_USAGE_BUDGET_POLICY=fail_closed).",
+    "unpricedUsageCountAsZero": "यह उपयोग प्रति-कुंजी उपयोग सीमाओं के लिए $0 माना जाता है (UNPRICED_USAGE_BUDGET_POLICY=count_as_zero).",
+    "unpricedUsageModelStats": "{requests, plural, one {# अनुरोध} other {# अनुरोध}}, {keys, plural, one {# सीमित कुंजी} other {# सीमित कुंजियाँ}}",
+    "unpricedUsageMore": "…और {count} और",
+    "unpricedUsageConfigure": "मूल्य निर्धारण कॉन्फ़िगर करें",
+    "unpricedUsageDismiss": "खारिज करें"
   },
   "analytics": {
     "title": "विश्लेषिकी",
@@ -12867,7 +12874,9 @@
       "disabled": "अक्षम",
       "dual": "दोहरा",
       "alias": "उपनाम",
-      "canonical": "कैनोनिकल"
+      "canonical": "कैनोनिकल",
+      "fail_closed": "ब्लॉक (fail_closed)",
+      "count_as_zero": "$0 के रूप में गिनें (count_as_zero)"
     },
     "definitions": {
       "REQUIRE_API_KEY": {
@@ -12996,6 +13005,10 @@
       },
       "SKILLS_SANDBOX_NETWORK_ENABLED": {
         "description": "स्किल्स सैंडबॉक्स में नेटवर्क एक्सेस सक्षम करें।"
+      },
+      "UNPRICED_USAGE_BUDGET_POLICY": {
+        "label": "बिना कीमत के उपयोग के लिए बजट नीति",
+        "description": "कैसे प्रति-कुंजी दैनिक/साप्ताहिक USD सीमाएँ उस सफल उपयोग को संभालती हैं जिसके प्रदाता/मॉडल के पास कोई मूल्य निर्धारण पंक्ति नहीं है। fail_closed (डिफ़ॉल्ट) विंडो को कोटा से अधिक माना जाता है, इसलिए अज्ञात लागत कभी भी हार्ड कैप पार नहीं कर सकती। count_as_zero उस उपयोग को $0 मानता है और मूल्य-निर्धारित खर्च को लागू रखना जारी रखता है। बिना कीमत वाले मॉडल किसी भी अवस्था में डैशबोर्ड होम पेज पर सूचीबद्ध होते हैं।"
       }
     }
   },

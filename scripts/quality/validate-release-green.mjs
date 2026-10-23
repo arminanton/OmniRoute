@@ -260,6 +260,69 @@ export function computeVerdict(results) {
   return { releaseGreen: hardFailures.length === 0, hardFailures, drift };
 }
 
+/** Verify the current-run evidence before it can admit a green verdict. */
+export function verifyReleaseGreenEvidence(report, validationExit, candidateSha, eventName, runId) {
+  const expectedProfile =
+    eventName === "push"
+      ? "quick"
+      : ["schedule", "workflow_dispatch"].includes(eventName)
+        ? "full"
+        : undefined;
+  const valid =
+    report?.schemaVersion === 1 &&
+    /^[0-9a-f]{40}$/.test(candidateSha ?? "") &&
+    report.candidateSha === candidateSha &&
+    /^\d+$/.test(runId ?? "") &&
+    report.runId === runId &&
+    expectedProfile !== undefined &&
+    report.profile === expectedProfile &&
+    /^\d+$/.test(validationExit ?? "") &&
+    Number(validationExit) <= 255 &&
+    typeof report.releaseGreen === "boolean" &&
+    Array.isArray(report.hardFailures) &&
+    Array.isArray(report.checks) &&
+    report.checks.length > 0 &&
+    report.checks.every(
+      (check) =>
+        typeof check?.id === "string" &&
+        check.id.length > 0 &&
+        ["hard", "drift"].includes(check.kind) &&
+        typeof check.ok === "boolean"
+    ) &&
+    report.checks.some((check) => check.kind === "hard") &&
+    report.hardFailures.every((failure) => typeof failure?.id === "string") &&
+    new Set(report.checks.map((check) => check.id)).size === report.checks.length;
+  if (!valid) {
+    return {
+      exit: 1,
+      verdict: "UNKNOWN",
+      evidenceState: "INCOMPLETE",
+      reason: "Invalid or missing report/provenance",
+    };
+  }
+
+  const failed = report.checks.filter((check) => check.kind === "hard" && !check.ok);
+  const consistent =
+    report.releaseGreen === (failed.length === 0) &&
+    report.hardFailures.length === failed.length &&
+    failed.every((check) => report.hardFailures.some((failure) => failure.id === check.id));
+  if (!consistent || (validationExit === "0") !== report.releaseGreen) {
+    return {
+      exit: 1,
+      verdict: "UNKNOWN",
+      evidenceState: "INCOMPLETE",
+      reason: "Exit and report disagree",
+    };
+  }
+
+  return {
+    exit: report.releaseGreen ? 0 : 1,
+    verdict: report.releaseGreen ? "PASS" : "FAIL",
+    evidenceState: "COMPLETE",
+    reason: report.releaseGreen ? "Validated report" : "Required validation failed",
+  };
+}
+
 // ─── --full-ci: reproduce the EXACT ci.yml gate set (P0, v3.8.46 post-mortem) ──
 //
 // WHY: the curated HARD/DRIFT lists above are a hand-maintained SUBSET. The v3.8.46
@@ -822,6 +885,13 @@ async function main() {
     process.stdout.write(
       JSON.stringify(
         {
+          schemaVersion: 1,
+          candidateSha: execFileSync("git", ["rev-parse", "HEAD"], {
+            cwd: ROOT,
+            encoding: "utf8",
+          }).trim(),
+          profile: QUICK ? "quick" : WITH_BUILD && FULL_CI ? "full" : "standard",
+          runId: process.env.GITHUB_RUN_ID ?? null,
           releaseGreen,
           hardFailures: hardFailures.map((r) => ({ id: r.id, label: r.label, detail: r.detail })),
           drift: drift.map((r) => ({ id: r.id, label: r.label, detail: r.detail })),
@@ -838,5 +908,18 @@ async function main() {
 
 // Run only when invoked directly (so tests can import the pure helpers).
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  main();
+  const args = process.argv.slice(2);
+  if (args[0] === "--verify-evidence") {
+    let report;
+    try {
+      report = JSON.parse(readFileSync(args[1], "utf8"));
+    } catch {
+      // Missing or malformed evidence fails closed below.
+    }
+    const result = verifyReleaseGreenEvidence(report, args[2], args[3], args[4], args[5]);
+    if (result.exit !== 0) process.stderr.write(`[main-green] ${result.reason}\n`);
+    process.exitCode = result.exit;
+  } else {
+    main();
+  }
 }

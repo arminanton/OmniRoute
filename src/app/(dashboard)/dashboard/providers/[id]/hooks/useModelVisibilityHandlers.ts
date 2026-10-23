@@ -88,6 +88,8 @@ export interface UseModelVisibilityHandlersReturn {
   ) => Promise<void>;
   handleClearAllModels: () => Promise<void>;
   onTestModel: (modelId: string, fullModel: string) => Promise<void>;
+  handleBlacklistModel: (modelId: string, fullModel: string) => Promise<void>;
+  blacklistingModelId: string | null;
   handleTestAll: (targets: Array<{ modelId: string; fullModel: string }>) => Promise<void>;
   /** Apply a model's test-all result to the per-row status icon (used by the
    *  passthrough section, which runs its own test-all loop). */

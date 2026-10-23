@@ -65,7 +65,7 @@ interface CapturedPut {
   body: Record<string, unknown>;
 }
 
-function setupFetchMock(): { puts: CapturedPut[] } {
+function setupFetchMock(compressionGetStatuses: Array<number | Error> = []): { puts: CapturedPut[] } {
   const puts: CapturedPut[] = [];
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
@@ -108,7 +108,9 @@ function setupFetchMock(): { puts: CapturedPut[] } {
           // Echo a merged config so the panel keeps a coherent state.
           return json({ ...initialConfig, ...body });
         }
-        return json(initialConfig);
+        const status = compressionGetStatuses.shift() ?? 200;
+        if (status instanceof Error) throw status;
+        return json(initialConfig, status);
       }
 
       return json({}, 404);
@@ -121,6 +123,35 @@ function setupFetchMock(): { puts: CapturedPut[] } {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("CompressionPanel", () => {
+  it("shows load failures without controls and retries successfully", async () => {
+    const { puts } = setupFetchMock([new Error("network unavailable")]);
+    const { default: CompressionPanel } =
+      await import("../../../src/app/(dashboard)/dashboard/context/settings/CompressionPanel");
+
+    let container!: HTMLElement;
+    await act(async () => {
+      container = mount(<CompressionPanel />);
+    });
+    await flush();
+
+    expect(container.textContent).toContain("compressionTitle: failedToLoad");
+    expect(container.querySelector('[data-testid="engine-toggle-rtk"]')).toBeNull();
+    expect(puts).toHaveLength(0);
+
+    const retry = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "retry"
+    );
+    expect(retry).toBeTruthy();
+    await act(async () => {
+      retry!.click();
+    });
+    await flush();
+
+    expect(container.textContent).not.toContain("failedToLoad");
+    expect(container.querySelector('[data-testid="engine-row-rtk"]')).toBeTruthy();
+    expect(puts).toHaveLength(0);
+  });
+
   it("renders a row for every engine id in the catalog", async () => {
     setupFetchMock();
     const { default: CompressionPanel } =

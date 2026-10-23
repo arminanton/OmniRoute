@@ -10,6 +10,10 @@ import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { stripSensitiveResponseHeaders } from "@omniroute/open-sse/utils/upstreamResponseHeaders";
 import { handleChat } from "@/sse/handlers/chat";
 import { withChatAdmission } from "@/shared/middleware/withChatAdmission";
+import {
+  getSanitizedRequestHeaders,
+  transferRecordedBodyBytes,
+} from "@/shared/middleware/recordedBodyBytes";
 import { createInjectionGuard } from "@/middleware/promptInjectionGuard";
 import { getRelayTokenByHash, checkRateLimit, recordRelayUsage } from "@/lib/db/relayProxies";
 import {
@@ -289,7 +293,7 @@ async function postHandler(request: Request) {
     }
 
     // 3. Clone request and forward to internal handler
-    const cloned = request.clone();
+    const cloned = transferRecordedBodyBytes(request, request.clone());
 
     let parsedBody: unknown = null;
 
@@ -392,9 +396,18 @@ async function postHandler(request: Request) {
     }
 
     // 4. Proxy to internal handler
-    const originalRequest = new Request(
-      request.url.replace("/relay/chat/completions", "/chat/completions"),
-      request
+    const originalRequest = transferRecordedBodyBytes(
+      request,
+      new Request(
+        request.url.replace("/relay/chat/completions", "/chat/completions"),
+        {
+          method: request.method,
+          headers: getSanitizedRequestHeaders(request),
+          body: request.body,
+          signal: request.signal,
+          duplex: "half",
+        } as RequestInit & { duplex: "half" }
+      )
     );
     const response = await handleChat(originalRequest);
 

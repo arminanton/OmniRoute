@@ -178,6 +178,73 @@ test("applyEnrichment: partial pricing preserves untouched fields", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+test("lookupEnrichment: same-id bare metadata from another provider is ignored", () => {
+  const foreign: OmniRouteEnrichmentMap = new Map([
+    [
+      "model-x",
+      {
+        name: "Ollama title",
+        pricing: { input: 7 },
+        freeType: "recurring-credit",
+        providerAlias: "ollama",
+        providerCanonical: "ollama",
+      },
+    ],
+  ]);
+  assert.equal(lookupEnrichment("ih/model-x", foreign, new Map(), "ih"), undefined);
+});
+
+test("lookupEnrichment: owner mismatch rejects direct and canonical alias hits", () => {
+  const entry = {
+    name: "Claude model",
+    providerAlias: "cc",
+    providerCanonical: "claude",
+  };
+  const aliasMap: OmniRouteEnrichmentMap = new Map([["cc/model-x", entry]]);
+  const directMap: OmniRouteEnrichmentMap = new Map([["claude/model-x", entry]]);
+  const canonicalToAlias = buildCanonicalToAliasMap(aliasMap);
+
+  assert.equal(
+    lookupEnrichment("claude/model-x", directMap, canonicalToAlias, "ollama"),
+    undefined,
+  );
+  assert.equal(
+    lookupEnrichment("claude/model-x", aliasMap, canonicalToAlias, "ollama"),
+    undefined,
+  );
+});
+
+test("lookupEnrichment: ownerless short-alias bare fallback keeps only name", () => {
+  const bare: OmniRouteEnrichmentMap = new Map([
+    [
+      "nova-3",
+      {
+        name: "Nova 3",
+        pricing: { input: 7 },
+        providerAlias: "deepgram",
+        providerCanonical: "deepgram",
+        providerDisplayName: "Deepgram",
+      },
+    ],
+  ]);
+  assert.deepEqual(lookupEnrichment("dg/nova-3", bare, new Map()), { name: "Nova 3" });
+});
+
+test("lookupEnrichment: metadata-free bare pricing survives provider-qualified fallback", () => {
+  const entry = { pricing: { input: 2, output: 3 } };
+  const bare: OmniRouteEnrichmentMap = new Map([["nova-3", entry]]);
+  assert.deepEqual(lookupEnrichment("dg/nova-3", bare, new Map()), entry);
+});
+
+test("lookupEnrichment: exact provider/model identity beats a same-id bare entry", () => {
+  const sameId: OmniRouteEnrichmentMap = new Map([
+    ["model-x", { name: "Ollama title", providerAlias: "ollama", providerCanonical: "ollama" }],
+    ["ih/model-x", { name: "IH title", providerAlias: "ih", providerCanonical: "ih" }],
+  ]);
+  const found = lookupEnrichment("ih/model-x", sameId, buildCanonicalToAliasMap(sameId), "ih");
+  assert.equal(found?.name, "IH title");
+});
+
 // applyProviderTag (Option E)
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -839,19 +906,42 @@ test("lookupEnrichment: canonical → alias fallback hits", () => {
   assert.equal(hit?.name, "Claude Opus 4.7");
 });
 
-test("lookupEnrichment: short-alias (e.g. dg/nova-3) → bare-id fallback hits", () => {
-  // Fetcher writes both alias-key AND bare-id key. If alias isn't a known
-  // prefix in canonicalToAlias (no canonical mapping), bare-id fallback
-  // still rescues the row.
+test("lookupEnrichment: explicit owner rejects contradictory direct and alias hits", () => {
+  const aliasEntry = {
+    name: "Claude model",
+    providerAlias: "cc",
+    providerCanonical: "claude",
+  };
+  const aliasMap: OmniRouteEnrichmentMap = new Map([["cc/model-x", aliasEntry]]);
+  const directMap: OmniRouteEnrichmentMap = new Map([["claude/model-x", aliasEntry]]);
+  const c2a = buildCanonicalToAliasMap(aliasMap);
+
+  assert.equal(lookupEnrichment("claude/model-x", directMap, c2a, "ollama"), undefined);
+  assert.equal(lookupEnrichment("claude/model-x", aliasMap, c2a, "ollama"), undefined);
+  assert.equal(lookupEnrichment("claude/model-x", directMap, c2a, "claude")?.name, "Claude model");
+  assert.equal(lookupEnrichment("claude/model-x", aliasMap, c2a, "claude")?.name, "Claude model");
+});
+
+test("lookupEnrichment: short-alias (e.g. dg/nova-3) → name-only bare fallback", () => {
   const map = makeEnrichmentMap([
     { key: "deepgram/nova-3", name: "Nova 3 (Transcription)" },
     { key: "nova-3", name: "Nova 3 (Transcription)" },
   ]);
-  const c2a = buildCanonicalToAliasMap(map);
-  // `dg/nova-3` is the raw id — prefix `dg` not in canonicalToAlias map,
-  // but bare `nova-3` is. Bare fallback hits.
-  const hit = lookupEnrichment("dg/nova-3", map, c2a);
-  assert.equal(hit?.name, "Nova 3 (Transcription)");
+  map.set("nova-3", {
+    name: "Nova 3 (Transcription)",
+    pricing: { input: 7 },
+    providerAlias: "deepgram",
+    providerCanonical: "deepgram",
+    providerDisplayName: "Deepgram",
+  });
+  const hit = lookupEnrichment("dg/nova-3", map, buildCanonicalToAliasMap(map));
+  assert.deepEqual(hit, { name: "Nova 3 (Transcription)" });
+});
+
+test("lookupEnrichment: metadata-free bare pricing entry works without provider identity", () => {
+  const entry = { name: "Model X", pricing: { input: 2, output: 3 } };
+  const map: OmniRouteEnrichmentMap = new Map([["model-x", entry]]);
+  assert.deepEqual(lookupEnrichment("model-x", map, new Map()), entry);
 });
 
 test("lookupEnrichment: nothing matches → undefined", () => {

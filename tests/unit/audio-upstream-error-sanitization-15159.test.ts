@@ -127,6 +127,50 @@ test("audio transcription route sanitizes and caps upstream error messages", asy
   }
 });
 
+test("default audio transcription catch hides thrown provider errors", async () => {
+  const originalFetch = globalThis.fetch;
+  const thrownError = new Error(
+    "<html>Authorization: Bearer thrown-secret-token " +
+      "https://provider.example/v1/audio/transcriptions?token=url-secret raw-body-secret</html>"
+  ) as Error & { status?: unknown };
+  thrownError.status = 429;
+  thrownError.stack =
+    "Error: thrown-stack-secret\n    at transcribe (https://provider.example/v1/audio/transcriptions)";
+  globalThis.fetch = async () => {
+    throw thrownError;
+  };
+
+  try {
+    const formData = new FormData();
+    formData.append("model", "whisper-1");
+    formData.append("file", new File(["audio"], "audio.wav", { type: "audio/wav" }));
+    const response = await handleAudioTranscription({
+      formData,
+      credentials: { apiKey: "client-api-key" },
+      resolvedProvider: {
+        id: "openai",
+        format: "openai-compatible",
+        baseUrl: "https://openai.example/v1/audio/transcriptions",
+        authType: "api-key",
+        authHeader: "Authorization",
+        models: [],
+      },
+      resolvedModel: "whisper-1",
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 502);
+    assert.equal(payload.error.code, 502);
+    assert.equal(payload.error.message, "Transcription request failed");
+    assert.doesNotMatch(
+      payload.error.message,
+      /thrown-secret-token|url-secret|thrown-stack-secret|raw-body-secret|https?:\/\/|\/srv\/provider|at transcribe/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 const asyncProviderCases = [
   {
     name: "AssemblyAI",

@@ -74,6 +74,26 @@ function toNumber(value: unknown, fallback = 0): number {
   return fallback;
 }
 
+function requiredPrice(
+  value: unknown,
+  component: "input" | "output" | "cached" | "reasoning" | "cache_creation"
+): number {
+  const price = toNumber(value, Number.NaN);
+  if (!Number.isFinite(price) || price < 0) {
+    throw new Error(`Invalid model pricing: ${component} rate must be a finite non-negative number`);
+  }
+  // Pricing rows are JSON numbers; explicit 0 is a supported free rate, not a missing value.
+  return price;
+}
+
+function optionalPrice(
+  value: unknown,
+  fallback: number,
+  component: "cached" | "reasoning" | "cache_creation"
+): number {
+  return value === undefined ? fallback : requiredPrice(value, component);
+}
+
 function normalizeServiceTier(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -139,11 +159,15 @@ export function computeCostFromPricing(
   // per-token pricing rows exist only for estimation, so display surfaces opt in
   // to show $0 instead of an inflated estimate (#5552).
   if (options.flatRateAsZero && isFlatRateProvider(options.provider)) return 0;
-  const inputPrice = toNumber(pricing.input, 0);
-  const cachedPrice = toNumber(pricing.cached, inputPrice);
-  const outputPrice = toNumber(pricing.output, 0);
-  const reasoningPrice = toNumber(pricing.reasoning, outputPrice);
-  const cacheCreationPrice = toNumber(pricing.cache_creation, inputPrice);
+  const inputPrice = requiredPrice(pricing.input, "input");
+  const cachedPrice = optionalPrice(pricing.cached, inputPrice, "cached");
+  const outputPrice = requiredPrice(pricing.output, "output");
+  const reasoningPrice = optionalPrice(pricing.reasoning, outputPrice, "reasoning");
+  const cacheCreationPrice = optionalPrice(
+    pricing.cache_creation,
+    inputPrice,
+    "cache_creation"
+  );
 
   let cost = 0;
   const inputTokens = tokens.input ?? tokens.prompt_tokens ?? tokens.input_tokens ?? 0;

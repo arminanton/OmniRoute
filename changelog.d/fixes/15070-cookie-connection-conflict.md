@@ -1,0 +1,1 @@
+Bulk web-session imports now report a safe per-entry conflict instead of overwriting a same-name cookie connection with a different credential. Reimporting the same credential still updates the existing connection.

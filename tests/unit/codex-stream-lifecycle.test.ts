@@ -57,7 +57,26 @@ test("premature upstream WebSocket close emits a failure event", async () => {
       providerSpecificData: { codexTransport: "websocket", codexFingerprintMode: "off" },
     },
   });
-  assert.match(await result.response.text(), /response.failed/);
+  const text = await result.response.text();
+  assert.match(text, /response.failed/);
+  const dataLine = text.split("\n").find((line) => line.startsWith("data: "));
+  assert.ok(dataLine);
+  assert.match(JSON.parse(dataLine.slice("data: ".length)).response.id, /^resp_/);
+});
+
+test("Codex response failures synthesize an ID but preserve upstream response IDs", () => {
+  const streamId = "resp_codex_stream";
+  const synthetic = encodeResponseSseEvent('{"type":"error"}', streamId);
+  const syntheticLine = synthetic.sse.split("\n").find((line) => line.startsWith("data: "));
+  assert.ok(syntheticLine);
+  assert.equal(JSON.parse(syntheticLine.slice("data: ".length)).response.id, streamId);
+
+  const upstream = encodeResponseSseEvent(
+    '{"type":"response.failed","response":{"id":"resp_upstream_123","error":{"message":"failed"}}}'
+  );
+  const upstreamLine = upstream.sse.split("\n").find((line) => line.startsWith("data: "));
+  assert.ok(upstreamLine);
+  assert.equal(JSON.parse(upstreamLine.slice("data: ".length)).response.id, "resp_upstream_123");
 });
 
 test("an incomplete response is terminal and each speed tier retains its wire value", () => {

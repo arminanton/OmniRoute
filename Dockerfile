@@ -331,6 +331,10 @@ RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,targe
   && rm -rf /var/lib/apt/lists/* \
   && git config --system url."https://github.com/".insteadOf "ssh://git@github.com/"
 
+# Qoder PAT auth shells out to qodercli for WASM-signed Cosy auth.
+RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
+  npm install -g --no-audit --no-fund @qoder-ai/qodercli@1.1.63
+
 # Lock all four CLI trees (Codex0.153.2, Claude2.1.260, Droid0.212.0,
 # OpenClaw2026.9.1) without changing standard global package or bin paths.
 # Nested installation keeps each complete dependency/resource tree contained.

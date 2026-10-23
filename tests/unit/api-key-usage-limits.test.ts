@@ -56,7 +56,7 @@ test("API key USD usage limits persist and default off", async () => {
   assert.equal(metadata?.weeklyUsageLimitUsd, 50);
 });
 
-test("getApiKeyUsageLimitStatus aligns weekly USD spend with provider resetAt when available", async () => {
+test("getApiKeyUsageLimitStatus excludes future-dated USD usage while aligning weekly spend with provider resetAt", async () => {
   await localDb.updatePricing({
     claude: {
       "claude-opus-4-8": {
@@ -102,6 +102,15 @@ test("getApiKeyUsageLimitStatus aligns weekly USD spend with provider resetAt wh
     tokens: { input: 7_000_000, output: 0 },
     success: true,
     timestamp: "2026-06-18T12:00:00.000Z",
+  });
+  await usageHistory.saveRequestUsage({
+    provider: "claude",
+    model: "claude-opus-4-8",
+    apiKeyId: created.id,
+    apiKeyName: "Metered Key",
+    tokens: { input: 20_000_000, output: 0 },
+    success: true,
+    timestamp: "2026-06-20T00:00:00.000Z",
   });
 
   const metadata = await apiKeysDb.getApiKeyMetadata(created.key);

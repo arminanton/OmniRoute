@@ -328,7 +328,9 @@ test("malformed upstream image usage does not create usage rows", async () => {
     ["string count", '{"input_tokens":"1"}'],
     ["null count", '{"input_tokens":null}'],
     ["negative count", '{"output_tokens":-1}'],
+    ["fractional count", '{"input_tokens":1.5}'],
     ["nonfinite count", '{"input_tokens":1e999}'],
+    ["unsafe integer count", '{"input_tokens":9007199254740992}'],
   ] as const;
 
   for (const [label, usage] of invalidUsages) {

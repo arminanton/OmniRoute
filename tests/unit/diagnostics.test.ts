@@ -70,6 +70,7 @@ test("synthResponsesFailure includes a reason in the data payload", () => {
   const dataLine = sseText.split("\n").find((l) => l.startsWith("data: "));
   assert.ok(dataLine, "must have a data line");
   const parsed = JSON.parse(dataLine.slice("data: ".length));
+  assert.match(parsed?.response?.id, /^resp_[a-zA-Z0-9_]+$/);
   assert.ok(
     parsed?.response?.error?.message?.length > 0,
     `response.error.message should be non-empty, got: ${JSON.stringify(parsed?.response?.error)}`

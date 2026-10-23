@@ -156,6 +156,7 @@ const ROLE_OPTIONS: { value: "user" | "assistant" | "system"; labelKey: string }
 
 export default function CompressionSettingsTab() {
   const t = useTranslations("settings");
+  const common = useTranslations("common");
   const [config, setConfig] = useState<CompressionConfig>({
     enabled: false,
     defaultMode: "off",
@@ -213,24 +214,41 @@ export default function CompressionSettingsTab() {
   });
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [status, setStatus] = useState<"" | "saved" | "error">("");
   const [ruleMetadata, setRuleMetadata] = useState<RuleMetadata[]>([]);
 
   useEffect(() => {
+    let cancelled = false;
     fetch("/api/settings/compression")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data) setConfig(data);
+      .then((r) => {
+        if (!r.ok) throw new Error("Compression settings load failed");
+        return r.json();
       })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+      .then((data) => {
+        if (!data || typeof data !== "object" || Array.isArray(data)) {
+          throw new Error("Compression settings response was invalid");
+        }
+        if (!cancelled) setConfig(data);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     fetch("/api/compression/rules")
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (Array.isArray(data?.rules)) setRuleMetadata(data.rules);
+        if (!cancelled && Array.isArray(data?.rules)) setRuleMetadata(data.rules);
       })
       .catch(() => {});
-  }, []);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadAttempt]);
 
   const save = async (updates: Partial<CompressionConfig>) => {
     const newConfig = { ...config, ...updates };
@@ -280,6 +298,27 @@ export default function CompressionSettingsTab() {
     return (
       <Card className="p-6">
         <p className="text-sm text-text-muted">{t("loading")}</p>
+      </Card>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <Card className="p-6">
+        <div className="flex items-center justify-between gap-4">
+          <p role="alert" className="text-sm text-text-muted">
+            {t("compressionTitle")}: {common("failedToLoad")}
+          </p>
+          <Button
+            onClick={() => {
+              setLoading(true);
+              setLoadError(false);
+              setLoadAttempt((attempt) => attempt + 1);
+            }}
+          >
+            {t("retry")}
+          </Button>
+        </div>
       </Card>
     );
   }

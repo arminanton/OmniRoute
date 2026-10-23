@@ -13,19 +13,23 @@ export function buildExecutorClientHeaders(
   userAgent?: string | null
 ) {
   const normalized: Record<string, string> = {};
-  const isLeaseControlHeader = (key: string) => {
+  const isInternalHeader = (key: string) => {
     const lowerKey = key.toLowerCase();
-    return lowerKey === "x-omniroute-lease-owner" || lowerKey === "x-omniroute-lease-generation";
+    return (
+      lowerKey === "x-omniroute-lease-owner" ||
+      lowerKey === "x-omniroute-lease-generation" ||
+      lowerKey === "x-omniroute-recorded-body-bytes"
+    );
   };
 
   if (headers instanceof Headers) {
     headers.forEach((value, key) => {
-      if (isLeaseControlHeader(key)) return;
+      if (isInternalHeader(key)) return;
       normalized[key] = value;
     });
   } else if (headers && typeof headers === "object") {
     for (const [key, value] of Object.entries(headers)) {
-      if (isLeaseControlHeader(key)) continue;
+      if (isInternalHeader(key)) continue;
       if (typeof value === "string") {
         normalized[key] = value;
       }

@@ -85,6 +85,27 @@ test("attachRequestStreamGuards swallows a client abort on req without throwing"
   });
 });
 
+test("attachRequestStreamGuards handles non-Error values with non-string messages", () => {
+  const req = makeReq();
+  const res = makeRes();
+  attachRequestStreamGuards(req, res);
+  const malformed = {
+    name: "AbortError",
+    message: {
+      toString() {
+        throw new Error("message must not be coerced");
+      },
+    },
+  };
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    assert.doesNotThrow(() => req.emit("error", malformed));
+  } finally {
+    console.error = originalError;
+  }
+});
+
 test("attachRequestStreamGuards is idempotent (no double listeners / no throw)", () => {
   const req = makeReq();
   const res = makeRes();
@@ -124,6 +145,18 @@ test("proxy-looking codes cannot forge exhausted-transport provenance", () => {
     causeCode: "UND_ERR_SOCKET",
   });
   assert.equal(shouldSwallowUncaught(spoof, "uncaughtException"), false);
+  assert.equal("markProxyFetchExhaustedTransportError" in sharedGuard, false);
+  assert.equal("isProxyFetchExhaustedTransportError" in sharedGuard, false);
+  assert.equal(shouldSwallowUncaught(spoof, "uncaughtException"), false);
+
+  const forgedFastFail = Object.assign(new Error("[Proxy Fast-Fail] Proxy unreachable: fake"), {
+    code: "PROXY_UNREACHABLE",
+    errorCode: "proxy_unreachable",
+    statusCode: 503,
+    causeCode: "UND_ERR_SOCKET",
+    cause: Object.assign(new Error("socket failure"), { code: "UND_ERR_SOCKET" }),
+  });
+  assert.equal(shouldSwallowUncaught(forgedFastFail, "uncaughtException"), false);
 });
 
 test("installProcessCrashGuard does not throw on import and is idempotent", () => {

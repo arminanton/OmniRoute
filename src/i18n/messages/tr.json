@@ -1889,7 +1889,14 @@
     "readinessStep3": "Copy your endpoint",
     "readinessStep4": "Send a test request",
     "readinessContinue": "Continue setup",
-    "readinessDismiss": "Dismiss for now"
+    "readinessDismiss": "Dismiss for now",
+    "unpricedUsageTitle": "{count, plural, one {# model} other {# model}} yakın zamanda kullanılmış ancak fiyatı yapılandırılmamış",
+    "unpricedUsageFailClosed": "{keys, plural, one {# kullanım sınırı olan API anahtarı} other {# kullanım sınırı olan API anahtarları}} son 8 günde bu modelleri kullandı. Bu kullanım bir anahtarın günlük veya haftalık dönemindeyse, anahtar kota aşılmış sayılır ve istekleri engellenir (UNPRICED_USAGE_BUDGET_POLICY=fail_closed).",
+    "unpricedUsageCountAsZero": "Bu kullanım, anahtar başına kullanım limitlerine $0 olarak sayılır (UNPRICED_USAGE_BUDGET_POLICY=count_as_zero).",
+    "unpricedUsageModelStats": "{requests, plural, one {# istek} other {# istek}}, {keys, plural, one {# sınırlı anahtar} other {# sınırlı anahtar}}",
+    "unpricedUsageMore": "…ve {count} tane daha",
+    "unpricedUsageConfigure": "Fiyatlandırmayı yapılandır",
+    "unpricedUsageDismiss": "Kapat"
   },
   "analytics": {
     "title": "Analitik",
@@ -12867,7 +12874,9 @@
       "disabled": "Devre Dışı",
       "dual": "İkili",
       "alias": "Takma Ad",
-      "canonical": "Kanonik"
+      "canonical": "Kanonik",
+      "fail_closed": "Engelle (fail_closed)",
+      "count_as_zero": "$0 olarak say (count_as_zero)"
     },
     "definitions": {
       "REQUIRE_API_KEY": {
@@ -12996,6 +13005,10 @@
       },
       "SKILLS_SANDBOX_NETWORK_ENABLED": {
         "description": "Yetenekler korumalı alanında (skills sandbox) ağ erişimini etkinleştirin."
+      },
+      "UNPRICED_USAGE_BUDGET_POLICY": {
+        "label": "Fiyatlandırılmamış Kullanım Bütçe Politikası",
+        "description": "Anahtar başına günlük/haftalık USD limitlerinin, sağlayıcısı/modeli için fiyat satırı olmayan başarılı kullanımı nasıl ele aldığı. fail_closed (varsayılan) pencereyi aşılmış olarak işaretler; böylece bilinmeyen bir maliyet sert bir üst sınırı aşamaz. count_as_zero bu kullanımı $0 olarak sayar ve fiyatlandırılmış harcamayı uygulamaya devam eder. Fiyatlandırılmamış modeller her durumda pano ana sayfasında listelenir."
       }
     }
   },

@@ -6,6 +6,7 @@ import {
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import { randomBytes } from "crypto";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
+import { RECORDED_BODY_BYTES_HEADER } from "@/shared/middleware/recordedBodyBytes";
 import { createErrorResponse, createErrorResponseFromUnknown } from "@/lib/api/errorResponse";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import { denoDeploySchema } from "@/shared/validation/freeProxySchemas";
@@ -115,6 +116,7 @@ Deno.serve(async (request) => {
     "host", "connection", "content-length", "keep-alive", "proxy-connection",
     "proxy-authenticate", "proxy-authorization", "transfer-encoding", "te", "trailer", "upgrade",
     "x-relay-target", "x-relay-path", "x-relay-auth",
+    ${JSON.stringify(RECORDED_BODY_BYTES_HEADER)},
   ].forEach(h => headers.delete(h));
   const init = { method: request.method, headers };
   if (request.method !== "GET" && request.method !== "HEAD") {

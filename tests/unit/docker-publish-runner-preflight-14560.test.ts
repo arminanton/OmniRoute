@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const workflow = readFileSync(
   new URL("../../.github/workflows/docker-publish.yml", import.meta.url),
   "utf8"
+);
+const shouldPromoteLatestScript = fileURLToPath(
+  new URL("../../scripts/ci/should-promote-latest.sh", import.meta.url)
 );
 
 function job(name: string): string {
@@ -13,6 +18,13 @@ function job(name: string): string {
   assert.notEqual(start, -1, `missing ${name} job`);
   const end = lines.findIndex((line, index) => index > start && /^  [a-z][a-z-]*:$/.test(line));
   return lines.slice(start, end === -1 ? undefined : end).join("\n");
+}
+
+function shouldPromote(version: string, tags: string[]): string {
+  return execFileSync("bash", [shouldPromoteLatestScript, version], {
+    input: tags.join("\n") + (tags.length ? "\n" : ""),
+    encoding: "utf8",
+  }).trim();
 }
 
 test("offline omni-build pool fails preflight with actionable recovery steps", () => {
@@ -84,4 +96,24 @@ test("runner alert dedupes offline issue, posts fresh evidence, and closes on re
     alert,
     /omni-build runner pool recovered[\s\S]*?Fresh Actions API evidence[\s\S]*?gh api --method PATCH[\s\S]*?state=closed/
   );
+});
+
+test("manual :latest promotion is opt-in and limited to the highest stable tag", () => {
+  const prepare = job("prepare");
+  const dispatchPromotion = prepare.match(
+    /elif \[ "\$EVENT_NAME" = "workflow_dispatch" \]; then([\s\S]*?)\n          else/
+  );
+  assert.ok(dispatchPromotion, "workflow_dispatch promotion guard must exist");
+  assert.match(
+    dispatchPromotion[1],
+    /if \[ "\$\{PROMOTE_INPUT:-false\}" = "true" \]; then/
+  );
+  assert.match(
+    dispatchPromotion[1],
+    /PROMOTE=\$\(git tag -l 'v\[0-9\]\*' \| bash scripts\/ci\/should-promote-latest\.sh "\$VERSION"\)/
+  );
+
+  // Exercise the exact semver helper the workflow calls with visible tag history.
+  assert.equal(shouldPromote("3.8.50", ["v3.8.50", "v3.9.0"]), "false");
+  assert.equal(shouldPromote("3.9.0", ["v3.8.50", "v3.9.0"]), "true");
 });

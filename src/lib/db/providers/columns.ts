@@ -132,7 +132,7 @@ export function sanitizeRateLimitOverrides(
       }
       map.modelConcurrency = modelConcurrency;
     } else if (typeof v === "number" && Number.isInteger(v) && v >= 0) {
-      map[key as keyof ConnectionRateLimitOverrides] = v;
+      map[key as Exclude<keyof ConnectionRateLimitOverrides, "modelConcurrency">] = v;
     } else {
       rejected.push(key);
     }

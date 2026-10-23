@@ -1889,7 +1889,14 @@
     "readinessStep3": "Copy your endpoint",
     "readinessStep4": "Send a test request",
     "readinessContinue": "Continue setup",
-    "readinessDismiss": "Dismiss for now"
+    "readinessDismiss": "Dismiss for now",
+    "unpricedUsageTitle": "{count, plural, one {# โมเดล} other {# โมเดล}} ที่มีการใช้งานล่าสุดแต่ยังไม่ได้กำหนดราคา",
+    "unpricedUsageFailClosed": "{keys, plural, one {# คีย์ API ที่มีขีดจำกัดการใช้งาน} other {# คีย์ API ที่มีขีดจำกัดการใช้งาน}} ใช้โมเดลเหล่านี้ในช่วง 8 วันที่ผ่านมา ขณะที่การใช้งานนั้นอยู่ในหน้าต่างรายวันหรือรายสัปดาห์ของคีย์ คีย์จะถูกมองว่าเกินโควต้าและคำขอของมันจะถูกบล็อก (UNPRICED_USAGE_BUDGET_POLICY=fail_closed).",
+    "unpricedUsageCountAsZero": "การใช้งานนี้จะถูกนับเป็น $0 ต่อขีดจำกัดการใช้งานต่อคีย์ (UNPRICED_USAGE_BUDGET_POLICY=count_as_zero).",
+    "unpricedUsageModelStats": "{requests, plural, one {# คำขอ} other {# คำขอ}}, {keys, plural, one {# คีย์ที่มีขีดจำกัด} other {# คีย์ที่มีขีดจำกัด}}",
+    "unpricedUsageMore": "…และอีก {count} รายการ",
+    "unpricedUsageConfigure": "ตั้งค่าราคา",
+    "unpricedUsageDismiss": "ปิด"
   },
   "analytics": {
     "title": "การวิเคราะห์",
@@ -12867,7 +12874,9 @@
       "disabled": "ปิดใช้งาน",
       "dual": "แบบคู่",
       "alias": "นามแฝง",
-      "canonical": "มาตรฐาน"
+      "canonical": "มาตรฐาน",
+      "fail_closed": "บล็อก (fail_closed)",
+      "count_as_zero": "นับเป็น $0 (count_as_zero)"
     },
     "definitions": {
       "REQUIRE_API_KEY": {
@@ -12996,6 +13005,10 @@
       },
       "SKILLS_SANDBOX_NETWORK_ENABLED": {
         "description": "เปิดใช้งานการเข้าถึงเครือข่ายใน skills sandbox"
+      },
+      "UNPRICED_USAGE_BUDGET_POLICY": {
+        "label": "นโยบายงบประมาณการใช้งานที่ไม่มีราคา",
+        "description": "วิธีที่ขีดจำกัด USD ต่อคีย์รายวัน/รายสัปดาห์จัดการกับการใช้งานที่สำเร็จซึ่งผู้ให้บริการ/โมเดลไม่มีแถวราคากำหนดไว้ โดย fail_closed (ค่าเริ่มต้น) จะทำเครื่องหมายว่าหน้าต่างถูกเกินโควต้า ดังนั้นต้นทุนที่ไม่ทราบจะไม่สามารถหลุดผ่านเพดานแบบแข็งได้ ส่วน count_as_zero จะนับการใช้งานนั้นเป็น $0 และยังคงบังคับใช้การใช้จ่ายที่มีราคา โมเดลที่ไม่มีราคาจะยังคงถูกแสดงในหน้าหลักของแดชบอร์ดทั้งสองกรณี."
       }
     }
   },

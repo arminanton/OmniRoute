@@ -202,6 +202,14 @@ test("MaxAI upstream failure preserves safe status/message without leaking upstr
     const body = await response.text();
     assert.equal(fetchCalls, 1);
     assert.equal(response.status, 429);
+    assert.equal(
+      response.headers.get("Access-Control-Allow-Methods"),
+      "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+    );
+    assert.equal(
+      response.headers.get("Access-Control-Allow-Headers"),
+      "Content-Type, Authorization, x-api-key, anthropic-version, x-omniroute-connection, x-internal-test, accept"
+    );
     assert.ok(response.status >= 400 && response.status <= 599);
     assert.deepEqual(JSON.parse(body), {
       error: { message: "MaxAI transcription rejected", code: 429 },

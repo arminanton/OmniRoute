@@ -24,6 +24,7 @@ import { rewriteHtml } from "@/lib/services/htmlRewriter";
 import { toUpstreamPath } from "@/lib/services/embedPath";
 import { createErrorResponse } from "@/lib/api/errorResponse";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
+import { RECORDED_BODY_BYTES_HEADER } from "@/shared/middleware/recordedBodyBytes";
 
 // ─── constants ────────────────────────────────────────────────────────────────
 
@@ -44,7 +45,7 @@ export const HOP_BY_HOP = new Set([
  * Request headers stripped before forwarding to the embedded service.
  * Prevents OmniRoute session cookies and Authorization from leaking upstream.
  */
-export const STRIPPED_REQUEST_HEADERS = new Set(["cookie", "authorization"]);
+export const STRIPPED_REQUEST_HEADERS = new Set(["cookie", "authorization", RECORDED_BODY_BYTES_HEADER]);
 
 /**
  * Response headers stripped before returning to the browser.

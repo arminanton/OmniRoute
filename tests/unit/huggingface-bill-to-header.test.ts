@@ -18,6 +18,10 @@ test("Hugging Face bill-to header trims and emits only for the exact provider", 
   applyHuggingFaceBillToHeader(maxLengthHeaders, "huggingface", { billTo: "x".repeat(500) });
   assert.equal(maxLengthHeaders["X-HF-Bill-To"]?.length, 500);
 
+  const latin1Headers: Record<string, string> = {};
+  applyHuggingFaceBillToHeader(latin1Headers, "huggingface", { billTo: "\u00ff" });
+  assert.deepEqual(latin1Headers, { "X-HF-Bill-To": "\u00ff" });
+
   const otherProviderHeaders: Record<string, string> = {};
   applyHuggingFaceBillToHeader(otherProviderHeaders, "huggingface-compatible", {
     billTo: "account-id",
@@ -33,12 +37,15 @@ test("configured headers omit invalid bill-to values", () => {
     42,
     "account\r\nX-Injected: yes",
     "bad\u0001value",
+    "\u0100",
+    "💵",
     "x".repeat(501),
   ];
   for (const billTo of invalidValues) {
     const headers: Record<string, string> = {};
     applyConfiguredUserAgent(headers, { billTo }, "huggingface");
     assert.equal(headers["X-HF-Bill-To"], undefined);
+    assert.doesNotThrow(() => new Headers(headers));
   }
 });
 
@@ -52,6 +59,7 @@ test("provider schema accepts safe bill-to values and rejects unsafe values", ()
   const parse = (billTo: unknown) =>
     updateProviderConnectionSchema.safeParse({ providerSpecificData: { billTo } });
   assert.equal(parse(" account-id ").success, true);
+  assert.equal(parse("\u00ff").success, true);
   assert.equal(parse("").success, true);
   const clearParse = parse(null);
   assert.equal(clearParse.success, true, "null explicitly clears a merge-persisted value");
@@ -61,6 +69,8 @@ test("provider schema accepts safe bill-to values and rejects unsafe values", ()
   for (const billTo of [
     "account\r\nX-Injected: yes",
     "bad\u0001value",
+    "\u0100",
+    "💵",
     "x".repeat(501),
     " ".repeat(501),
   ]) {

@@ -29,7 +29,7 @@ interface NotifyStore {
 export interface ImportProgress {
   current: number;
   total: number;
-  phase: "idle" | "fetching" | "importing" | "done" | "error";
+  phase: "idle" | "fetching" | "importing" | "done" | "warning" | "error";
   status: string;
   logs: string[];
   error: string;
@@ -151,12 +151,18 @@ export function useModelImportHandlers({
       }
       const fetchedModels = data.models || [];
       const importWarning = extractImportWarning(data);
+      const usedFallbackCatalog = data.catalogFallback === true;
       if (fetchedModels.length === 0) {
         setImportProgress((prev) => ({
           ...prev,
-          phase: "done",
-          status: t("noModelsFound"),
-          logs: [t("noModelsReturnedFromEndpoint")],
+          phase: usedFallbackCatalog ? "warning" : "done",
+          status: usedFallbackCatalog
+            ? "Couldn't reach the provider's model list — showing the built-in catalog"
+            : t("noModelsFound"),
+          logs: [
+            ...(importWarning ? [importWarning] : []),
+            t("noModelsReturnedFromEndpoint"),
+          ],
         }));
         return;
       }
@@ -172,8 +178,10 @@ export function useModelImportHandlers({
       if (newModels.length === 0) {
         setImportProgress((prev) => ({
           ...prev,
-          phase: "done",
-          status: t("allModelsAlreadyImported") || "All models already imported",
+          phase: usedFallbackCatalog ? "warning" : "done",
+          status: usedFallbackCatalog
+            ? "Couldn't reach the provider's model list — showing the built-in catalog"
+            : t("allModelsAlreadyImported") || "All models already imported",
           logs: [
             ...(importWarning ? [importWarning] : []),
             t("noNewModelsToImport") || "No new models to import",

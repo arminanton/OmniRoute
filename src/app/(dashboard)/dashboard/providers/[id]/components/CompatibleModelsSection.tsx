@@ -115,6 +115,8 @@ export default function CompatibleModelsSection({
   onTestModel,
   modelTestStatus,
   testingModelId,
+  onBlacklistModel,
+  blacklistingModelId,
   onTestAll,
   testingAll,
   testProgress,

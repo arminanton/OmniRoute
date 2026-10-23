@@ -25,6 +25,7 @@ import { getApiKeyById, getApiKeyMetadata, validateApiKey } from "@/lib/db/apiKe
 import { getProviderConnections } from "@/lib/db/providers";
 import { saveCallLog } from "@/lib/usage/callLogs";
 import { isRequireApiKeyEnabled } from "@/shared/utils/featureFlags";
+import { RECORDED_BODY_BYTES_HEADER } from "@/shared/middleware/recordedBodyBytes";
 import { HTTP_STATUS } from "../config/constants.ts";
 import {
   CURSOR_API_BASE_URL,
@@ -62,6 +63,7 @@ const REQUEST_HEADER_DENYLIST = new Set([
   "x-forwarded-proto",
   "x-real-ip",
   "cookie",
+  RECORDED_BODY_BYTES_HEADER,
 ]);
 
 const RESPONSE_HEADER_DENYLIST = new Set([

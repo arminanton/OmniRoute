@@ -123,10 +123,15 @@ jobs:
 
       - uses: ./.github/actions/npm-ci-retry
 
+      - name: Record validated revision
+        id: revision
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Release-green validation (full)
         id: validate
         env:
           EVENT_NAME: ${{ github.event_name }}
+          VALIDATED_SHA: ${{ steps.revision.outputs.sha }}
         run: |
           set +e
           # --hermetic: scrub live-test trigger vars (self-hosted runner may carry
@@ -147,6 +152,10 @@ jobs:
           # shellcheck disable=SC2086
           node scripts/quality/validate-release-green.mjs --json --hermetic $MODE \
             1> release-green.json 2> release-green.log
+          validation_exit=$?
+          node scripts/quality/validate-release-green.mjs --verify-evidence \
+            release-green.json "$validation_exit" "$VALIDATED_SHA" "$EVENT_NAME" "$GITHUB_RUN_ID" \
+            >> release-green.log 2>&1
           echo "exit=$?" >> "$GITHUB_OUTPUT"
           echo "------- report -------"
           cat release-green.log
@@ -201,9 +210,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET: ${{ steps.branch.outputs.target }}
+          VALIDATED_SHA: ${{ steps.revision.outputs.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          CURRENT_SHA=$(git ls-remote origin "refs/heads/${TARGET}" | cut -f1)
+          if [ -z "$CURRENT_SHA" ] || [ "$CURRENT_SHA" != "$VALIDATED_SHA" ]; then
+            echo "Release target advanced or disappeared; retaining the tracking issue."
+            exit 0
+          fi
           # The open/update step above is the UPWARD half of the loop; without this
           # step a stale "not green" issue outlives the fix and every base-green check
           # (`AGENTS.md` → "Base-green check") keeps stamping new PRs as base-red inherited.
@@ -212,7 +227,7 @@ jobs:
             --search "in:title $TITLE" --json number --jq '.[0].number' 2>/dev/null || echo "")
           if [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --reason completed \
-              --comment "✅ \`${TARGET}\` is release-green again at \`${GITHUB_SHA:0:9}\` — ${RUN_URL}. Auto-closed by Release-Green (continuous)."
+              --comment "✅ \`${TARGET}\` is release-green again at \`${VALIDATED_SHA:0:9}\` — ${RUN_URL}. Auto-closed by Release-Green (continuous)."
             echo "Closed issue #$EXISTING"
           fi
 
@@ -224,7 +239,7 @@ jobs:
           path: |
             release-green.json
             release-green.log
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   # Companion arm for `main`. Under the parallel-cycle model, main only receives merged
   # work at the release squash — so a gate/infra fix that lands only on release leaves
@@ -245,9 +260,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: main # literal — no injection surface; scheduled runs default to the repo default branch (a release/v*), so pin main explicitly
+          # Main pushes validate the immutable event commit; scheduled/dispatch runs sweep main.
+          ref: ${{ github.event_name == 'push' && github.sha || 'main' }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Record validated revision
+        id: revision
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v7
         with:
@@ -260,6 +280,7 @@ jobs:
         id: validate
         env:
           EVENT_NAME: ${{ github.event_name }}
+          VALIDATED_SHA: ${{ steps.revision.outputs.sha }}
         run: |
           set +e
           # push (a merge into main) → --quick fast HARD gates; schedule/dispatch → full sweep.
@@ -273,6 +294,10 @@ jobs:
           # shellcheck disable=SC2086
           node scripts/quality/validate-release-green.mjs --json --hermetic $MODE \
             1> main-green.json 2> main-green.log
+          validation_exit=$?
+          node scripts/quality/validate-release-green.mjs --verify-evidence \
+            main-green.json "$validation_exit" "$VALIDATED_SHA" "$EVENT_NAME" "$GITHUB_RUN_ID" \
+            >> main-green.log 2>&1
           echo "exit=$?" >> "$GITHUB_OUTPUT"
           echo "------- report -------"
           cat main-green.log
@@ -283,6 +308,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           EVENT_NAME: ${{ github.event_name }}
+          VALIDATED_SHA: ${{ steps.revision.outputs.sha }}
         run: |
           set -euo pipefail
           TITLE="🔴 main branch not green"
@@ -297,6 +323,8 @@ jobs:
             echo "\`_shared/merge-gates.md\` §8), NOT chasing each contributor PR."
             echo ""
             echo "**Run:** ${RUN_URL} (mode: ${EVENT_NAME})"
+            echo ""
+            echo "**Validated commit:** ${VALIDATED_SHA}"
             echo ""
             echo '```'
             sed -n '/──────── verdict ────────/,$p' main-green.log || tail -40 main-green.log
@@ -319,8 +347,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          VALIDATED_SHA: ${{ steps.revision.outputs.sha }}
         run: |
           set -euo pipefail
+          CURRENT_SHA=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$CURRENT_SHA" != "$VALIDATED_SHA" ]; then
+            echo "Branch advanced; retaining the tracking issue."
+            exit 0
+          fi
           # The open/update step above is the UPWARD half of the loop; without this
           # step a stale "not green" issue outlives the fix and every base-green check
           # (`AGENTS.md` → "Base-green check") keeps stamping new PRs as base-red inherited.
@@ -329,7 +363,7 @@ jobs:
             --search "in:title $TITLE" --json number --jq '.[0].number' 2>/dev/null || echo "")
           if [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --reason completed \
-              --comment "✅ \`main\` is main-green again at \`${GITHUB_SHA:0:9}\` — ${RUN_URL}. Auto-closed by Release-Green (continuous)."
+              --comment "✅ \`main\` is main-green again at \`${VALIDATED_SHA}\` — ${RUN_URL}. Auto-closed after full validation of the current branch."
             echo "Closed issue #$EXISTING"
           fi
 
@@ -341,7 +375,17 @@ jobs:
           path: |
             main-green.json
             main-green.log
-          if-no-files-found: ignore
+          if-no-files-found: error
+
+      - name: Enforce validation verdict
+        if: always()
+        env:
+          VALIDATION_EXIT: ${{ steps.validate.outputs.exit }}
+          VALIDATED_SHA: ${{ steps.revision.outputs.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: >-
+          node scripts/quality/validate-release-green.mjs --verify-evidence
+          main-green.json "$VALIDATION_EXIT" "$VALIDATED_SHA" "$EVENT_NAME" "$GITHUB_RUN_ID"
 
   # ── Banking lane (#8584) ──────────────────────────────────────────────────
   # The ratchet is asymmetric: RAISING a cap is a ten-second manual JSON edit made

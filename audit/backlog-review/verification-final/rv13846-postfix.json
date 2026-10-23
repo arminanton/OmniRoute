@@ -1,0 +1,43 @@
+{
+  "review": "#13846 post-fix read-only verification",
+  "result": "PASS with scope caveats",
+  "scope": [
+    "src/app/api/tools/agent-bridge/agents/[id]/reset/route.ts",
+    "src/app/(dashboard)/dashboard/tools/agent-bridge/components/AgentCard.tsx",
+    "tests/unit/agent-bridge-reset-route.test.ts",
+    "src/proxy.ts auth pipeline entrypoint"
+  ],
+  "checks": [
+    {
+      "check": "Reset success requires verified post-state",
+      "result": "PASS",
+      "evidence": "Route clears DNS entry, mappings, and setup flags; recomputes DNS absence, empty mappings, and existing state with dns_enabled/setup_completed false. Failed verification returns 500; success response includes verified:true. (route.ts:68-73, 78-101)",
+      "unit_test_scope": "Tests cover verified success for normal and mappings-only cases, plus 500/verified:false when reset fails. (agent-bridge-reset-route.test.ts:93-119)"
+    },
+    {
+      "check": "Mappings-only config reset",
+      "result": "PASS",
+      "evidence": "No prior-state/DNS precondition; route upserts cleared state after scoped cleanup. Unit test seeds mappings only and expects 200, verified=true, empty mappings, false state flags. (route.ts:68-82; agent-bridge-reset-route.test.ts:93-106)"
+    },
+    {
+      "check": "Sibling isolation",
+      "result": "PASS for scoped calls and DB assertions; host effect not directly tested",
+      "evidence": "Route passes selected id to removeDNSEntry, setMappings, mapping-alias sync, and state upsert. Test verifies sibling mapping and state remain; response reports another active agent. (route.ts:68-73, 97-99; agent-bridge-reset-route.test.ts:67-90)",
+      "caveat": "DNS writes are disabled in this unit suite (test file:3,11), and it does not assert sibling host-file contents. Host isolation is supported by ID-scoped call, not demonstrated by this test."
+    },
+    {
+      "check": "Shared MITM/root CA untouched",
+      "result": "PASS at reviewed route callsite level",
+      "evidence": "Reset performs host/DNS removal, per-agent mapping cleanup/sync, and per-agent setup-state update; no CA/root certificate mutation or shared MITM reset call appears in the reviewed handler (route.ts:68-73).",
+      "caveat": "No unit assertion covers CA/root trust state; conclusion is source-callsite scope, not runtime verification of imported helpers."
+    },
+    {
+      "check": "Endpoint auth",
+      "result": "Proxy enforcement configured; unit test does not cover it",
+      "evidence": "src/proxy.ts routes requests through runAuthzPipeline(request, { enforce: true }) (line 29); matcher includes /api/:path* (line 46), covering this endpoint path.",
+      "unit_test_scope": "Tests import and invoke resetRoute.POST directly with Request objects (agent-bridge-reset-route.test.ts:18, 40-64, 67-118); this bypasses Next proxy/auth. No proxy integration-auth coverage is established by this suite.",
+      "caveat": "Reviewed proxy entrypoint/matcher only; did not inspect pipeline internals or establish a specific principal/permission policy."
+    }
+  ],
+  "execution": "Static read-only review only; no tests, edits, build, or deploy run."
+}

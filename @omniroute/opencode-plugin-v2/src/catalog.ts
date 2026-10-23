@@ -702,7 +702,7 @@ export async function publishCatalog(
       baseURL: opts.baseURL,
       apiFormat: opts.apiFormat,
     });
-    applyEnrichment(mapped, lookupEnrichment(entry.id, enrichment, canonicalToAlias), {
+    applyEnrichment(mapped, lookupEnrichment(entry.id, enrichment, canonicalToAlias, entry.owned_by), {
       providerTag: opts.providerTag !== false,
     });
     const mid = mapped.id.startsWith(X + "/") ? mapped.id.slice(X.length + 1) : mapped.id;

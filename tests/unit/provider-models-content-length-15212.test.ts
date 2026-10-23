@@ -83,3 +83,33 @@ test("filtered provider models response drops stale body headers and remains rea
   assert.equal(response.headers.get("vary"), "Origin");
   assert.equal(response.headers.get("x-request-id"), "upstream-request");
 });
+
+test("unfiltered provider models response preserves the upstream body and headers", async (t) => {
+  const upstreamBody = "upstream response body";
+  const upstreamResponse = new Response(upstreamBody, {
+    headers: {
+      "content-type": "text/plain",
+      "content-length": String(new TextEncoder().encode(upstreamBody).byteLength),
+      "x-request-id": "upstream-request",
+    },
+  });
+  t.mock.method(
+    providerModelsRoute.providerModelsCatalog,
+    "getUnifiedModelsResponse",
+    async () => upstreamResponse
+  );
+
+  const response = await providerModelsRoute.GET(
+    new Request("http://localhost/api/v1/providers/openai/models"),
+    { params: Promise.resolve({ provider: "openai" }) }
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), upstreamBody);
+  assert.equal(response.headers.get("content-type"), "text/plain");
+  assert.equal(
+    response.headers.get("content-length"),
+    String(new TextEncoder().encode(upstreamBody).byteLength)
+  );
+  assert.equal(response.headers.get("x-request-id"), "upstream-request");
+});

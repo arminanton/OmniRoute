@@ -21,6 +21,88 @@ describe("lookupEnrichment", () => {
     const found = lookupEnrichment("claude/model-x", enrichment, canonicalToAlias);
     assert.equal(found?.name, "Model X");
   });
+  it("rejects contradictory explicit owners on direct and alias hits", () => {
+    const aliasEntry = {
+      name: "Claude model",
+      providerAlias: "cc",
+      providerCanonical: "claude",
+    };
+    const aliasMap: OmniRouteEnrichmentMap = new Map([["cc/model-x", aliasEntry]]);
+    const directMap: OmniRouteEnrichmentMap = new Map([["claude/model-x", aliasEntry]]);
+    const canonicalToAlias = buildCanonicalToAliasMap(aliasMap);
+
+    assert.equal(
+      lookupEnrichment("claude/model-x", directMap, canonicalToAlias, "ollama"),
+      undefined,
+    );
+    assert.equal(
+      lookupEnrichment("claude/model-x", aliasMap, canonicalToAlias, "ollama"),
+      undefined,
+    );
+    assert.equal(
+      lookupEnrichment("claude/model-x", directMap, canonicalToAlias, "claude")?.name,
+      "Claude model",
+    );
+    assert.equal(
+      lookupEnrichment("claude/model-x", aliasMap, canonicalToAlias, "claude")?.name,
+      "Claude model",
+    );
+  });
+  it("rejects same-id bare enrichment owned by another provider", () => {
+    const foreign: OmniRouteEnrichmentMap = new Map([
+      [
+        "model-x",
+        {
+          name: "Ollama title",
+          pricing: { input: 7 },
+          freeType: "recurring-credit",
+          providerAlias: "ollama",
+          providerCanonical: "ollama",
+        },
+      ],
+    ]);
+    assert.equal(lookupEnrichment("ih/model-x", foreign, new Map(), "ih"), undefined);
+  });
+
+  it("keeps only the name on short-alias bare fallback", () => {
+    const bare: OmniRouteEnrichmentMap = new Map([
+      [
+        "nova-3",
+        {
+          name: "Nova 3",
+          pricing: { input: 7 },
+          providerAlias: "deepgram",
+          providerCanonical: "deepgram",
+          providerDisplayName: "Deepgram",
+        },
+      ],
+    ]);
+    assert.deepEqual(lookupEnrichment("dg/nova-3", bare, new Map()), { name: "Nova 3" });
+  });
+
+  it("keeps metadata-free bare pricing when the row has no provider identity", () => {
+    const entry = { name: "Model X", pricing: { input: 2, output: 3 } };
+    const bare: OmniRouteEnrichmentMap = new Map([["model-x", entry]]);
+    assert.deepEqual(lookupEnrichment("model-x", bare, new Map()), entry);
+  });
+
+  it("keeps metadata-free bare pricing on a provider-qualified row", () => {
+    const entry = { pricing: { input: 2, output: 3 } };
+    const bare: OmniRouteEnrichmentMap = new Map([["nova-3", entry]]);
+    assert.deepEqual(lookupEnrichment("dg/nova-3", bare, new Map()), entry);
+  });
+
+  it("prefers exact provider/model identity over a same-id bare entry", () => {
+    const sameId: OmniRouteEnrichmentMap = new Map([
+      [
+        "model-x",
+        { name: "Ollama title", providerAlias: "ollama", providerCanonical: "ollama" },
+      ],
+      ["ih/model-x", { name: "IH title", providerAlias: "ih", providerCanonical: "ih" }],
+    ]);
+    const found = lookupEnrichment("ih/model-x", sameId, buildCanonicalToAliasMap(sameId), "ih");
+    assert.equal(found?.name, "IH title");
+  });
 });
 
 describe("applyEnrichment", () => {

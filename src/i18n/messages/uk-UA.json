@@ -1889,7 +1889,14 @@
     "readinessStep3": "Copy your endpoint",
     "readinessStep4": "Send a test request",
     "readinessContinue": "Continue setup",
-    "readinessDismiss": "Dismiss for now"
+    "readinessDismiss": "Dismiss for now",
+    "unpricedUsageTitle": "{count, plural, one {# модель} few {# моделі} many {# моделей} other {# моделей}} з нещодавнім використанням, але без налаштованої ціни",
+    "unpricedUsageFailClosed": "{keys, plural, one {# API-ключ із лімітом використання} few {# API-ключі із лімітом використання} many {# API-ключів із лімітом використання} other {# API-ключів із лімітом використання}} використовували ці моделі за останні 8 днів. Якщо це використання припадає на добове або тижневе вікно ключа, ключ вважається таким, що перевищив квоту, і його запити блокуються (UNPRICED_USAGE_BUDGET_POLICY=fail_closed).",
+    "unpricedUsageCountAsZero": "Це використання зараховується як $0 до лімітів використання по ключу (UNPRICED_USAGE_BUDGET_POLICY=count_as_zero).",
+    "unpricedUsageModelStats": "{requests, plural, one {# запит} few {# запити} many {# запитів} other {# запитів}}, {keys, plural, one {# ключ із лімітом} few {# ключі із лімітом} many {# ключів із лімітом} other {# ключів із лімітом}}",
+    "unpricedUsageMore": "…та ще {count}",
+    "unpricedUsageConfigure": "Налаштувати ціни",
+    "unpricedUsageDismiss": "Закрити"
   },
   "analytics": {
     "title": "Аналітика",
@@ -12867,7 +12874,9 @@
       "disabled": "Вимкнено",
       "dual": "Подвійний",
       "alias": "Псевдонім",
-      "canonical": "Канонічний"
+      "canonical": "Канонічний",
+      "fail_closed": "Блокувати (fail_closed)",
+      "count_as_zero": "Зарахувати як $0 (count_as_zero)"
     },
     "definitions": {
       "REQUIRE_API_KEY": {
@@ -12996,6 +13005,10 @@
       },
       "SKILLS_SANDBOX_NETWORK_ENABLED": {
         "description": "Увімкнути доступ до мережі в пісочниці навичок."
+      },
+      "UNPRICED_USAGE_BUDGET_POLICY": {
+        "label": "Політика бюджету для використання без ціни",
+        "description": "Як добові/тижневі ліміти в USD для кожного ключа трактують успішні виклики, провайдер/модель яких не має запису про ціноутворення. fail_closed (за замовчуванням) позначає вікно як перевищене, тому невідома вартість ніколи не може обійти жорсткий ліміт. count_as_zero зараховує таке використання як $0 і продовжує застосовувати платне витрачання. Непрайсовані моделі в будь‑якому разі відображаються на головній сторінці панелі."
       }
     }
   },

@@ -13,6 +13,10 @@ import {
   releaseChatAdmissionWhenDone,
   resolveSessionId,
 } from "@/shared/middleware/chatBodyAdmission";
+import {
+  getSanitizedRequestHeaders,
+  transferRecordedBodyBytes,
+} from "@/shared/middleware/recordedBodyBytes";
 import { SSE_HEARTBEAT_INTERVAL_MS } from "@omniroute/open-sse/config/constants";
 import { resolveStreamFlag } from "@omniroute/open-sse/utils/aiSdkCompat";
 import { errorResponse } from "@omniroute/open-sse/utils/error";
@@ -64,8 +68,7 @@ export async function withCodexPreferredModel(
   try {
     const body =
       preParsedBody ??
-      (await request
-        .clone()
+      (await transferRecordedBodyBytes(request, request.clone())
         .json()
         .catch(() => null));
     if (!body || typeof body !== "object" || typeof body.model !== "string") {
@@ -80,12 +83,15 @@ export async function withCodexPreferredModel(
 
     const rewrittenBody = { ...body, model };
     return {
-      request: new Request(request.url, {
-        method: request.method,
-        headers: request.headers,
-        body: JSON.stringify(rewrittenBody),
-        signal: request.signal,
-      }),
+      request: transferRecordedBodyBytes(
+        request,
+        new Request(request.url, {
+          method: request.method,
+          headers: getSanitizedRequestHeaders(request),
+          body: JSON.stringify(rewrittenBody),
+          signal: request.signal,
+        })
+      ),
       body: rewrittenBody,
     };
   } catch {

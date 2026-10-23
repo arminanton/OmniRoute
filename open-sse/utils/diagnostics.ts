@@ -10,6 +10,7 @@
  */
 
 import { sanitizeErrorMessage } from "./error.ts";
+import { createSyntheticResponsesId } from "./sseHeartbeat.ts";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -134,14 +135,17 @@ export function synthOpenAIErrorChunk(opts: {
  *
  * Message is sanitized through sanitizeErrorMessage (Hard Rule #12).
  */
-export function synthResponsesFailure(reason?: MalformedReason): string {
+export function synthResponsesFailure(
+  reason?: MalformedReason,
+  syntheticResponsesId = createSyntheticResponsesId()
+): string {
   const safeMessage = sanitizeErrorMessage(
     `stream closed before response.completed (${describeReason(reason)})`
   );
   const event = {
     type: "response.failed",
     response: {
-      id: null,
+      id: syntheticResponsesId,
       status: "failed",
       error: {
         type: "stream_error",
