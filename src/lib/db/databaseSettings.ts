@@ -55,6 +55,9 @@ const LEGACY_FLAT_KEYS: {
     compressionCacheStats: ["compressionCacheStats"],
     xpAuditLog: ["xpAuditLog"],
     compressionRunTelemetry: ["compressionRunTelemetry"],
+    conversationTurnNodes: ["conversationTurnNodes"],
+    compressionEngineBreakdown: ["compressionEngineBreakdown"],
+    agenticConversations: ["agenticConversations"],
     autoCleanupEnabled: ["autoCleanupEnabled"],
   },
   aggregation: {

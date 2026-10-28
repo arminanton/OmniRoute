@@ -53,6 +53,9 @@ export interface DatabaseSettings {
     compressionCacheStats: number;
     xpAuditLog: number;
     compressionRunTelemetry: number;
+    conversationTurnNodes?: number;
+    compressionEngineBreakdown?: number;
+    agenticConversations?: number;
     autoCleanupEnabled: boolean;
   };
 
@@ -124,6 +127,9 @@ export const DEFAULT_DATABASE_SETTINGS: Omit<DatabaseSettings, "location" | "sta
     compressionCacheStats: 30,
     xpAuditLog: 30,
     compressionRunTelemetry: 30,
+    conversationTurnNodes: 7,
+    compressionEngineBreakdown: 7,
+    agenticConversations: 7,
     autoCleanupEnabled: true,
   },
   aggregation: {

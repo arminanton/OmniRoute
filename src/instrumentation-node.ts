@@ -695,6 +695,19 @@ export async function registerNodejs(): Promise<void> {
     console.warn("[STARTUP] Could not start cleanup scheduler (non-fatal):", msg);
   }
 
+  // Proactive idle GC scheduler: reclaims transient heap memory and prevents
+  // swap accumulation when the server is idle (0 in-flight requests).
+  try {
+    if (periodicServicesAllowed("idle-gc")) {
+      const { startIdleGcScheduler } = await import("@/lib/memory/idleGc");
+      startIdleGcScheduler();
+    }
+  } catch (err: unknown) {
+    if (isRuntimePolicyError(err)) throw err;
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[STARTUP] Could not start idle GC scheduler (non-fatal):", msg);
+  }
+
   // Warm the model catalog's durable, apiKey-independent sub-caches at
   // startup — see warmModelCatalogCache() for why the top-level Response
   // cache alone doesn't deliver this. Fire-and-forget, non-fatal.

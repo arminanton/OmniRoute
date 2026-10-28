@@ -8,6 +8,8 @@ import {
   clearMemoStore,
   resultMemoForTests,
   MEMO_CAP,
+  getMemoMemoryBytes,
+  MAX_MEMO_BYTES,
 } from "../../../open-sse/services/compression/resultMemo.ts";
 import type { CompressionResult } from "../../../open-sse/services/compression/types.ts";
 import { DEFAULT_COMPRESSION_CONFIG } from "../../../open-sse/services/compression/types.ts";
@@ -112,6 +114,42 @@ describe("resultMemo unit", () => {
 
     // The first entry should have been evicted
     assert.equal(memoLookup(firstKey), null);
+  });
+
+  it("memoStore tracks memory bytes accurately and clearMemoStore resets bytes", () => {
+    clearMemoStore();
+    assert.equal(getMemoMemoryBytes(), 0);
+
+    const key = makeMemoKey({ x: "test-payload" }, "lite", memoConfig, "bytes-test");
+    const result: CompressionResult = {
+      body: { messages: [{ role: "user", content: "some long content for bytes measurement" }] },
+      compressed: true,
+      stats: null,
+    };
+    memoStore(key, result);
+
+    assert.ok(getMemoMemoryBytes() > 0, "memo bytes should be tracked");
+    assert.equal(resultMemoForTests.totalBytes, getMemoMemoryBytes());
+
+    clearMemoStore();
+    assert.equal(getMemoMemoryBytes(), 0);
+  });
+
+  it("memoLookup expires entries when TTL is exceeded", () => {
+    clearMemoStore();
+    const key = makeMemoKey({ x: "ttl" }, "lite", memoConfig, "ttl-test");
+    const stub: CompressionResult = { body: { prompt: "hello" }, compressed: false, stats: null };
+    memoStore(key, stub);
+
+    // Mock Date.now into the future beyond TTL
+    const originalNow = Date.now;
+    try {
+      Date.now = () => originalNow() + 31 * 60 * 1000;
+      assert.equal(memoLookup(key), null, "entry should expire after 30m TTL");
+      assert.equal(getMemoMemoryBytes(), 0, "expired entry bytes should be reclaimed");
+    } finally {
+      Date.now = originalNow;
+    }
   });
 });
 

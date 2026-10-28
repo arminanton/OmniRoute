@@ -3,8 +3,18 @@ import type { CompressionConfig, CompressionMode, CompressionResult } from "./ty
 import { jsonSha256 } from "../../utils/jsonHash.ts";
 
 export const MEMO_CAP = 5_000;
+export const MAX_MEMO_BYTES = 64 * 1024 * 1024; // 64 MB memory budget for memoization
+export const MAX_MEMO_ENTRY_BYTES = 8 * 1024 * 1024; // 8 MB max per entry
+export const MEMO_TTL_MS = 30 * 60 * 1000; // 30 minutes TTL
 
-const memoMap = new Map<string, CompressionResult>();
+interface MemoEntry {
+  result: CompressionResult;
+  bytes: number;
+  expiresAt: number;
+}
+
+const memoMap = new Map<string, MemoEntry>();
+let totalMemoBytes = 0;
 let lookupCountForTests = 0;
 let memoHits = 0;
 let memoMisses = 0;
@@ -128,28 +138,94 @@ function usesVisionDependentEngine(mode: CompressionMode, config?: CompressionCo
   return false;
 }
 
-function boundedSet(key: string, value: CompressionResult): void {
-  if (!memoMap.has(key) && memoMap.size >= MEMO_CAP) {
-    const firstKey = memoMap.keys().next().value;
-    if (firstKey !== undefined) {
-      memoMap.delete(firstKey);
+export function estimateResultBytes(result: CompressionResult): number {
+  if (!result || !result.body) return 1024;
+  let bytes = 1024;
+  const messages = (result.body.messages ?? result.body.contents ?? result.body.input) as unknown;
+  if (Array.isArray(messages)) {
+    for (const msg of messages) {
+      if (!msg) continue;
+      bytes += 128;
+      if (typeof msg.content === "string") {
+        bytes += msg.content.length;
+      } else if (Array.isArray(msg.content)) {
+        for (const part of msg.content) {
+          if (!part) continue;
+          bytes += 64;
+          if (typeof part.text === "string") {
+            bytes += part.text.length;
+          } else if (part.source && typeof part.source.data === "string") {
+            bytes += part.source.data.length;
+          } else if (typeof part.image_url === "object" && typeof part.image_url?.url === "string") {
+            bytes += part.image_url.url.length;
+          }
+        }
+      }
     }
+  } else if (typeof result.body.prompt === "string") {
+    bytes += result.body.prompt.length;
   }
-  memoMap.set(key, value);
+  return bytes;
+}
+
+function boundedSet(key: string, value: CompressionResult): void {
+  const bytes = estimateResultBytes(value);
+  // Do not memoize runaway individual payloads exceeding single-entry budget
+  if (bytes > MAX_MEMO_ENTRY_BYTES) {
+    return;
+  }
+
+  // Deduct previous entry size if updating existing key
+  const existing = memoMap.get(key);
+  if (existing) {
+    totalMemoBytes = Math.max(0, totalMemoBytes - existing.bytes);
+    memoMap.delete(key);
+  }
+
+  // FIFO eviction: evict oldest entries if item cap or byte budget is exceeded
+  while (
+    memoMap.size > 0 &&
+    (memoMap.size >= MEMO_CAP || totalMemoBytes + bytes > MAX_MEMO_BYTES)
+  ) {
+    const firstKey = memoMap.keys().next().value;
+    if (firstKey === undefined) break;
+    const oldEntry = memoMap.get(firstKey);
+    if (oldEntry) {
+      totalMemoBytes = Math.max(0, totalMemoBytes - oldEntry.bytes);
+    }
+    memoMap.delete(firstKey);
+  }
+
+  memoMap.set(key, {
+    result: value,
+    bytes,
+    expiresAt: Date.now() + MEMO_TTL_MS,
+  });
+  totalMemoBytes += bytes;
 }
 
 export function memoLookup(key: string): CompressionResult | null {
   lookupCountForTests++;
-  const hit = memoMap.get(key);
-  if (!hit) {
+  const entry = memoMap.get(key);
+  if (!entry) {
     memoMisses++;
     recordLookup(false);
     return null;
   }
+
+  // TTL expiration check
+  if (Date.now() > entry.expiresAt) {
+    memoMap.delete(key);
+    totalMemoBytes = Math.max(0, totalMemoBytes - entry.bytes);
+    memoMisses++;
+    recordLookup(false);
+    return null;
+  }
+
   memoHits++;
   recordLookup(true);
   // Return a clone so downstream mutation cannot corrupt the cached value.
-  const cloned = structuredClone(hit);
+  const cloned = structuredClone(entry.result);
   if (cloned.stats) {
     cloned.stats.memoHit = true;
   }
@@ -200,9 +276,14 @@ export function getMemoStats(): {
   };
 }
 
+export function getMemoMemoryBytes(): number {
+  return totalMemoBytes;
+}
+
 /** For tests only — clears the in-process memo store and resets counters. */
 export function clearMemoStore(): void {
   memoMap.clear();
+  totalMemoBytes = 0;
   lookupCountForTests = 0;
   memoHits = 0;
   memoMisses = 0;
@@ -213,5 +294,8 @@ export function clearMemoStore(): void {
 export const resultMemoForTests = {
   get lookupCount(): number {
     return lookupCountForTests;
+  },
+  get totalBytes(): number {
+    return totalMemoBytes;
   },
 };

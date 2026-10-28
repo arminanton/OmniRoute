@@ -432,6 +432,108 @@ export async function cleanupCcrBlocks(): Promise<CleanupResult> {
 }
 
 /**
+ * Clean up old conversation_turn_nodes based on retention settings.
+ */
+export async function cleanupConversationTurnNodes(
+  retentionDays = getRetentionSettings().conversationTurnNodes ?? 7
+): Promise<CleanupResult> {
+  const db = getDbInstance();
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
+  const cutoffISO = cutoffDate.toISOString();
+
+  const result: CleanupResult = { deleted: 0, errors: 0 };
+
+  try {
+    if (!tableExists("conversation_turn_nodes")) return result;
+
+    const stmt = db.prepare("DELETE FROM conversation_turn_nodes WHERE last_seen_at < ?");
+    const runResult = stmt.run(cutoffISO);
+    result.deleted = runResult.changes;
+
+    // Also prune any orphaned turn nodes whose parent conversation no longer exists
+    if (tableExists("agentic_conversations")) {
+      const orphanStmt = db.prepare(
+        "DELETE FROM conversation_turn_nodes WHERE conversation_id NOT IN (SELECT id FROM agentic_conversations)"
+      );
+      const orphanResult = orphanStmt.run();
+      result.deleted += orphanResult.changes;
+    }
+
+    console.log(
+      `[Cleanup] Deleted ${result.deleted} conversation_turn_nodes older than ${retentionDays} days or orphaned`
+    );
+  } catch (err: unknown) {
+    console.error("[Cleanup] Error cleaning conversation_turn_nodes:", err);
+    result.errors++;
+  }
+
+  return result;
+}
+
+/**
+ * Clean up old compression_engine_breakdown based on retention settings.
+ */
+export async function cleanupCompressionEngineBreakdown(
+  retentionDays = getRetentionSettings().compressionEngineBreakdown ?? 7
+): Promise<CleanupResult> {
+  const db = getDbInstance();
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
+  const cutoffISO = cutoffDate.toISOString();
+
+  const result: CleanupResult = { deleted: 0, errors: 0 };
+
+  try {
+    if (!tableExists("compression_engine_breakdown")) return result;
+
+    const stmt = db.prepare("DELETE FROM compression_engine_breakdown WHERE timestamp < ?");
+    const runResult = stmt.run(cutoffISO);
+    result.deleted = runResult.changes;
+
+    console.log(
+      `[Cleanup] Deleted ${result.deleted} compression_engine_breakdown older than ${retentionDays} days`
+    );
+  } catch (err: unknown) {
+    console.error("[Cleanup] Error cleaning compression_engine_breakdown:", err);
+    result.errors++;
+  }
+
+  return result;
+}
+
+/**
+ * Clean up old agentic_conversations based on retention settings.
+ */
+export async function cleanupAgenticConversations(
+  retentionDays = getRetentionSettings().agenticConversations ?? 7
+): Promise<CleanupResult> {
+  const db = getDbInstance();
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
+  const cutoffISO = cutoffDate.toISOString();
+
+  const result: CleanupResult = { deleted: 0, errors: 0 };
+
+  try {
+    if (!tableExists("agentic_conversations")) return result;
+
+    const stmt = db.prepare("DELETE FROM agentic_conversations WHERE last_seen_at < ?");
+    const runResult = stmt.run(cutoffISO);
+    result.deleted = runResult.changes;
+
+    console.log(
+      `[Cleanup] Deleted ${result.deleted} agentic_conversations older than ${retentionDays} days`
+    );
+  } catch (err: unknown) {
+    console.error("[Cleanup] Error cleaning agentic_conversations:", err);
+    result.errors++;
+  }
+
+  return result;
+}
+
+/**
  * Run all cleanup functions if auto-cleanup is enabled.
  */
 export async function runAutoCleanup(): Promise<{
@@ -464,6 +566,9 @@ export async function runAutoCleanup(): Promise<{
     compressionRunTelemetry: await cleanupCompressionRunTelemetry(),
     proxyLogs: await cleanupProxyLogs(),
     ccrBlocks: await cleanupCcrBlocks(),
+    conversationTurnNodes: await cleanupConversationTurnNodes(),
+    compressionEngineBreakdown: await cleanupCompressionEngineBreakdown(),
+    agenticConversations: await cleanupAgenticConversations(),
   };
 
   const totalDeleted = Object.values(results).reduce((sum, r) => sum + r.deleted, 0);
