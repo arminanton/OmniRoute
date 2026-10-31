@@ -125,6 +125,7 @@ import { chatgpt_web_codexProvider } from "./registry/chatgpt-web-codex/index.ts
 import { chatgpt_webProvider } from "./registry/chatgpt-web/index.ts";
 import { openrouterProvider } from "./registry/openrouter/index.ts";
 import { cheaperinferenceProvider } from "./registry/cheaperinference/index.ts";
+import { ghostcliProvider } from "./registry/ghostcli/index.ts";
 import { openvectaProvider } from "./registry/openvecta/index.ts";
 import { openferenceProvider } from "./registry/openference/index.ts";
 import { openference_apiProvider } from "./registry/openference-api/index.ts";
@@ -397,6 +398,7 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   "chatgpt-web": chatgpt_webProvider,
   openrouter: openrouterProvider,
   cheaperinference: cheaperinferenceProvider,
+  ghostcli: ghostcliProvider,
   openvecta: openvectaProvider,
   openference: openferenceProvider,
   "openference-api": openference_apiProvider,

@@ -24,6 +24,7 @@ export const PROVIDER_COLORS = {
   kimi: { bg: "#06B6D4", text: "#fff", label: "Kimi" },
   // Dark foreground: #31f889 is a bright green, white text on it fails contrast.
   cheaperinference: { bg: "#31f889", text: "#04170d", label: "Cheaper Inference" },
+  ghostcli: { bg: "#6366F1", text: "#fff", label: "GhostCLI" },
 };
 
 // ═══════════════════════════════════════════

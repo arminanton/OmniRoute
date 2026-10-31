@@ -161,6 +161,10 @@ const lazyExecutors: Record<string, () => Promise<BaseExecutor>> = {
     import("./cheaperinference.ts").then((m) => new m.CheaperInferenceExecutor()),
   cinf: () =>
     import("./cheaperinference.ts").then((m) => new m.CheaperInferenceExecutor("cheaperinference")), // Alias
+  ghostcli: () =>
+    import("./ghostcli.ts").then((m) => new m.GhostCliExecutor()),
+  gcli: () =>
+    import("./ghostcli.ts").then((m) => new m.GhostCliExecutor("ghostcli")), // Alias
   "doubao-web": () => import("./doubao-web.ts").then((m) => new m.DoubaoWebExecutor()),
   db: () => import("./doubao-web.ts").then((m) => new m.DoubaoWebExecutor()), // Alias
   "zai-web": () => import("./zai-web.ts").then((m) => new m.ZaiWebExecutor()),

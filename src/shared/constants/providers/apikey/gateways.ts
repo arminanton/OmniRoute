@@ -38,6 +38,21 @@ export const APIKEY_PROVIDERS_GATEWAYS = {
       "Create an API key at https://cheaperinference.com/?utm_source=omniroute (needs the `inference` scope), then paste the ir_live_… token here.",
     passthroughModels: true,
   },
+  ghostcli: {
+    id: "ghostcli",
+    serviceKinds: ["llm"],
+    alias: "gcli",
+    name: "GhostCLI",
+    icon: "bolt",
+    color: "#6366F1",
+    textIcon: "GC",
+    website: "https://ghostcli.cloud",
+    authHint:
+      "Create or copy your API key at https://ghostcli.cloud/dashboard#chaves, then paste the gcli_… key here. Note: Ensure your connecting egress IP (e.g. 66.183.196.137) is whitelisted.",
+    apiHint:
+      "GhostCLI Enterprise multi-model gateway with 1M context across Claude Opus 5.5, Sonnet 5, Fable 5.1, GLM 5.3, and GPT-6 Astra (1,000 RPM).",
+    passthroughModels: true,
+  },
   freebuff: {
     id: "freebuff",
     alias: "freebuff",
