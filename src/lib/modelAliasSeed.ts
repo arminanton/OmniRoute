@@ -6,6 +6,17 @@ export const DEFAULT_MODEL_ALIAS_SEED = Object.freeze({
   "claude-sonnet-4-6": "agy/claude-sonnet-4-6",
   "claude-opus-4-6-thinking": "agy/claude-opus-4-6-thinking",
   "gemini-3.6-flash-low": "agy/gemini-3.6-flash-low",
+  "ghcl/glm-5.3": "ghostcli/z-ai/glm-5.3",
+  "ghcl/glm-5.3-flash": "ghostcli/z-ai/glm-5.3-flash",
+  "ghcl/claude-opus-5.5": "ghostcli/claude-opus-5-5",
+  "ghcl/claude-opus-5-5": "ghostcli/claude-opus-5-5",
+  "ghcl/claude-sonnet-5": "ghostcli/claude-sonnet-5",
+  "ghcl/claude-fable-5.1": "ghostcli/claude-fable-5.1",
+  "ghcl/gpt-6-astra": "ghostcli/gpt-6-astra",
+  "ghcl/astra": "ghostcli/gpt-6-astra",
+  "ghcl/opus-5.5": "ghostcli/claude-opus-5-5",
+  "ghcl/sonnet-5": "ghostcli/claude-sonnet-5",
+  "ghcl/fable-5.1": "ghostcli/claude-fable-5.1",
 });
 
 // Remove only aliases that still match a default value previously shipped by OmniRoute.

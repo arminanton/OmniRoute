@@ -41,7 +41,8 @@ export const APIKEY_PROVIDERS_GATEWAYS = {
   ghostcli: {
     id: "ghostcli",
     serviceKinds: ["llm"],
-    alias: "gcli",
+    alias: "ghcl",
+    additionalAliases: ["ghostcli", "gcli", "ghost-cli"],
     name: "GhostCLI",
     icon: "bolt",
     color: "#6366F1",

@@ -3,6 +3,28 @@ import { PROVIDERS } from "../config/constants.ts";
 import { getModelTargetFormat, PROVIDER_ID_TO_ALIAS } from "../config/providerModels.ts";
 
 /**
+ * Normalization map from short aliases or alternative representations
+ * to the exact canonical IDs required by upstream GhostCLI endpoints.
+ */
+export const GHOSTCLI_MODEL_MAP: Record<string, string> = {
+  "glm-5.3": "z-ai/glm-5.3",
+  "glm-5.3-flash": "z-ai/glm-5.3-flash",
+  "claude-opus-5.5": "claude-opus-5-5",
+  "claude-opus-5-5": "claude-opus-5-5",
+  "opus-5.5": "claude-opus-5-5",
+  "opus": "claude-opus-5-5",
+  "claude-sonnet-5": "claude-sonnet-5",
+  "sonnet-5": "claude-sonnet-5",
+  "sonnet": "claude-sonnet-5",
+  "claude-fable-5.1": "claude-fable-5.1",
+  "claude-fable-5-1": "claude-fable-5.1",
+  "fable-5.1": "claude-fable-5.1",
+  "fable": "claude-fable-5.1",
+  "gpt-6-astra": "gpt-6-astra",
+  "astra": "gpt-6-astra",
+};
+
+/**
  * GhostCliExecutor — https://ghostcli.cloud
  *
  * GhostCLI is an Enterprise API Gateway providing 1,000,000 token context window
@@ -21,15 +43,22 @@ export class GhostCliExecutor extends BaseExecutor {
     super(provider, PROVIDERS[provider]);
   }
 
+  public normalizeModel(model: string): string {
+    const stripped = (model || "").replace(/^(ghcl|ghostcli|gcli)\//i, "").trim();
+    return GHOSTCLI_MODEL_MAP[stripped] || stripped;
+  }
+
   private usesMessagesEndpoint(model: string): boolean {
+    const normalized = this.normalizeModel(model);
     const alias = PROVIDER_ID_TO_ALIAS[this.provider] || this.provider;
-    const target = getModelTargetFormat(alias, model);
-    return target === "claude" || /^claude/i.test(model);
+    const target = getModelTargetFormat(alias, normalized) || getModelTargetFormat(alias, model);
+    return target === "claude" || /^claude/i.test(normalized);
   }
 
   private usesResponsesEndpoint(model: string): boolean {
+    const normalized = this.normalizeModel(model);
     const alias = PROVIDER_ID_TO_ALIAS[this.provider] || this.provider;
-    const target = getModelTargetFormat(alias, model);
+    const target = getModelTargetFormat(alias, normalized) || getModelTargetFormat(alias, model);
     return target === "openai-responses";
   }
 
@@ -53,7 +82,14 @@ export class GhostCliExecutor extends BaseExecutor {
     if (!cleanedBody || typeof cleanedBody !== "object" || Array.isArray(cleanedBody)) {
       return cleanedBody;
     }
-    return cleanedBody;
+
+    const reqObj = cleanedBody as Record<string, unknown>;
+    const targetModel = this.normalizeModel(String(reqObj.model || model));
+    if (targetModel) {
+      reqObj.model = targetModel;
+    }
+
+    return reqObj;
   }
 }
 

@@ -300,6 +300,11 @@
       "configSource": "grok-cli",
       "provider": "grok-cli"
     },
+    "gcli": {
+      "className": "GhostCliExecutor",
+      "configSource": "ghostcli",
+      "provider": "ghostcli"
+    },
     "gembiz": {
       "className": "GeminiBusinessExecutor",
       "configSource": "<custom-config>",
@@ -315,10 +320,20 @@
       "configSource": "<custom-config>",
       "provider": "gemini-web"
     },
+    "ghcl": {
+      "className": "GhostCliExecutor",
+      "configSource": "ghostcli",
+      "provider": "ghostcli"
+    },
     "ghe-copilot": {
       "className": "GheCopilotExecutor",
       "configSource": "<custom-config>",
       "provider": "ghe-copilot"
+    },
+    "ghostcli": {
+      "className": "GhostCliExecutor",
+      "configSource": "ghostcli",
+      "provider": "ghostcli"
     },
     "github": {
       "className": "GithubExecutor",
@@ -686,6 +701,6 @@
       "provider": "zai-web"
     }
   },
-  "keyCount": 137,
+  "keyCount": 140,
   "sharedInstances": []
 }
